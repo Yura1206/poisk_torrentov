@@ -348,7 +348,23 @@ export default function App() {
     setToast('Настройки сохранены.');
   };
 
+  const openSettings = async () => {
+    try {
+      const fresh = await window.torrentApi.getDetectedApps();
+      setDetectedApps(fresh);
+    } catch {
+      // ignore
+    }
+    setSettingsOpen(true);
+  };
+
   const handleOpenMagnet = async (item: TorrentResult) => {
+    try {
+      const fresh = await window.torrentApi.getDetectedApps();
+      setDetectedApps(fresh);
+    } catch {
+      // ignore
+    }
     let magnet = item.magnetUrl;
     if (!magnet && item.pageUrl) {
       setToast('Получение magnet-ссылки…');
@@ -526,7 +542,7 @@ export default function App() {
           </div>
         )}
       </div>
-      <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} title="Настройки" aria-label="Настройки">⚙</button>
+      <button className="icon-button" type="button" onClick={() => void openSettings()} title="Настройки" aria-label="Настройки">⚙</button>
     </header>
 
     <section className="query-controls" aria-label="Режим поиска">
@@ -1057,7 +1073,7 @@ function MagnetActionModal({
   const [remember, setRemember] = useState(false);
   const clients = apps.filter((a) => a.type === 'client');
   const players = apps.filter((a) => a.type === 'player');
-  const hasDedicatedClients = clients.some((c) => c.id !== 'system-default' || Boolean(c.path));
+  const hasDedicatedClients = clients.length > 0;
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -1304,14 +1320,15 @@ function SettingsDialog({
               className="settings-select"
             >
               <option value="ask">Спрашивать каждый раз (окно выбора)</option>
-              <optgroup label="Клиенты для скачивания">
-                <option value="system-default">Торрент-клиент по умолчанию (Windows)</option>
-                {detectedApps
-                  .filter((a) => a.type === 'client' && a.id !== 'system-default')
-                  .map((app) => (
-                    <option key={app.id} value={app.id}>{app.name}</option>
-                  ))}
-              </optgroup>
+              {detectedApps.some((a) => a.type === 'client') && (
+                <optgroup label="Клиенты для скачивания">
+                  {detectedApps
+                    .filter((a) => a.type === 'client')
+                    .map((app) => (
+                      <option key={app.id} value={app.id}>{app.name}</option>
+                    ))}
+                </optgroup>
+              )}
               {detectedApps.some((a) => a.type === 'player') && (
                 <optgroup label="Онлайн-просмотр (без скачивания)">
                   {detectedApps
@@ -1328,9 +1345,9 @@ function SettingsDialog({
               💡 <b>Онлайн-просмотр:</b> на ПК не найден сервер TorrServer или совместимый плеер. Если хотите смотреть видео онлайн без скачивания, установите <b>TorrServer</b> и медиаплеер <b>VLC</b> или <b>MPC-HC (K-Lite Codec Pack)</b>!
             </p>
           )}
-          {!detectedApps.some((a) => a.type === 'client' && a.id !== 'system-default') && (
+          {!detectedApps.some((a) => a.type === 'client') && (
             <p className="hint" style={{ marginTop: '6px' }}>
-              💡 <b>Скачивание торрентов:</b> для удобной загрузки рекомендуем установить бесплатный торрент-клиент <b>qBittorrent</b> или <b>uTorrent</b>!
+              💡 <b>Скачивание торрентов:</b> на ПК не найден подходящий торрент-клиент. Для удобной загрузки рекомендуем установить бесплатный торрент-клиент <b>qBittorrent</b> или <b>uTorrent</b>!
             </p>
           )}
         </div>

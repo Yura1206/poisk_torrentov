@@ -317,15 +317,6 @@ export class AppDetector {
         path: defaultMagnetExe,
         description: `Системная программа Windows (${path.basename(defaultMagnetExe)})`
       });
-    } else {
-      // Fallback generic system default
-      apps.push({
-        id: 'system-default',
-        name: 'Торрент-клиент по умолчанию (Windows)',
-        type: 'client',
-        path: '',
-        description: 'Использовать системную ассоциацию Windows для magnet-ссылок'
-      });
     }
 
     // Detect specific clients
