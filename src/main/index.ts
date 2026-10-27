@@ -18,9 +18,43 @@ import type { AppSettings, SearchRequest, TorrentResult } from '../shared/types'
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+  process.exit(0);
+}
+
 let mainWindow: BrowserWindow | undefined;
 let storage: LocalStorage;
 let engine: SearchEngine;
+
+function terminateApp(): void {
+  if (ruTrackerWorker && !ruTrackerWorker.isDestroyed()) {
+    try {
+      ruTrackerWorker.destroy();
+    } catch {
+      // ignore
+    }
+    ruTrackerWorker = undefined;
+  }
+
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      try {
+        win.destroy();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  app.quit();
+
+  const forceExitTimer = setTimeout(() => {
+    process.exit(0);
+  }, 300);
+  forceExitTimer.unref();
+}
 
 const isHttpUrl = (value: string): boolean => {
   try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; }
@@ -55,8 +89,16 @@ async function createWindow(): Promise<void> {
   });
   mainWindow.on('close', () => {
     if (!mainWindow) return;
-    const bounds = mainWindow.getBounds();
-    void storage.saveWindow({ ...bounds, maximized: mainWindow.isMaximized() });
+    try {
+      const bounds = mainWindow.getBounds();
+      void storage.saveWindow({ ...bounds, maximized: mainWindow.isMaximized() });
+    } catch {
+      // ignore
+    }
+  });
+  mainWindow.on('closed', () => {
+    mainWindow = undefined;
+    terminateApp();
   });
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) await mainWindow.loadURL(devServerUrl);
@@ -558,13 +600,22 @@ app.whenReady().then(async () => {
   registerIpc();
   await createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); });
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 });
 
 app.on('before-quit', () => {
-  if (ruTrackerWorker && !ruTrackerWorker.isDestroyed()) {
-    ruTrackerWorker.destroy();
-    ruTrackerWorker = undefined;
-  }
+  terminateApp();
 });
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('will-quit', () => {
+  terminateApp();
+});
+
+app.on('window-all-closed', () => {
+  terminateApp();
+});
