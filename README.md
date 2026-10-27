@@ -4,6 +4,15 @@
 
 ---
 
+### 📥 Скачать готовую программу (Portable .exe)
+
+Не требует установки. Просто скачайте файл и запустите:
+
+👉 **[Скачать Поисковик торрентов v1.0.0 (.exe)](https://github.com/Yura1206/poisk_torrentov/releases/latest/download/Poiskovik_torrentov_v1.0.0.exe)**  
+*(Все выпуски и версии доступны в разделе [Releases](https://github.com/Yura1206/poisk_torrentov/releases))*
+
+---
+
 ## 📸 Скриншоты
 
 ### Главный экран
