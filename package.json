@@ -1,0 +1,66 @@
+{
+  "name": "torrent-navigator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Настольный поиск публично доступных торрент-раздач",
+  "main": "dist/main/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.main.json --watch\" \"wait-on http://127.0.0.1:5173 file:dist/main/main/index.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "typecheck": "tsc --noEmit -p tsconfig.renderer.json && tsc --noEmit -p tsconfig.main.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build": "npm run typecheck && npm run test && npm run build:renderer && npm run build:main",
+    "dist": "powershell -Command \"Stop-Process -Name 'Поисковик*' -Force -ErrorAction SilentlyContinue\" && npm run build && electron-builder --win portable && powershell -Command \"Remove-Item -Path 'release/win-unpacked' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -Path 'release/builder-debug.yml' -Force -ErrorAction SilentlyContinue\"",
+    "dist:portable": "npm run dist",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "iconv-lite": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "electron": "^37.4.0",
+    "electron-builder": "^26.0.12",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vitest": "^3.2.4",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "ru.torrentnavigator.app",
+    "productName": "Поисковик торрентов",
+    "compression": "normal",
+    "electronLanguages": ["ru", "en-US"],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map",
+      "!dist/**/*.test.*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "build/icon.ico",
+      "target": ["portable"],
+      "artifactName": "Поисковик торрентов.${ext}"
+    },
+    "portable": {
+      "artifactName": "Поисковик торрентов.${ext}"
+    }
+  }
+}

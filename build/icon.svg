@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e1b4b" />
+      <stop offset="100%" stop-color="#090d16" />
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#c084fc" />
+    </linearGradient>
+    <linearGradient id="filmGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="lensGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.85" />
+      <stop offset="40%" stop-color="#6366f1" stop-opacity="0.65" />
+      <stop offset="100%" stop-color="#a855f7" stop-opacity="0.85" />
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+    <filter id="neon" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background rounded plate -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bgGrad)" stroke="url(#borderGrad)" stroke-width="8" filter="url(#shadow)" />
+
+  <!-- Film Strip / Clapperboard in Background -->
+  <g transform="translate(48, 60) rotate(-6, 200, 180)" filter="url(#shadow)">
+    <!-- Main Slate Body -->
+    <rect x="50" y="80" width="280" height="200" rx="18" fill="url(#filmGrad)" stroke="#334155" stroke-width="4" />
+    
+    <!-- Film Perforations on Top and Bottom -->
+    <rect x="70" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="110" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="150" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="190" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="230" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="270" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+
+    <!-- Center Play/Film screen inside slate -->
+    <rect x="70" y="126" width="240" height="110" rx="10" fill="#0b0f19" stroke="#1e293b" stroke-width="2" />
+    
+    <!-- Play Triangle -->
+    <polygon points="175,155 215,181 175,207" fill="#60a5fa" opacity="0.8" />
+
+    <!-- Bottom Perforations -->
+    <rect x="70" y="250" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="110" y="250" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="150" y="250" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="190" y="250" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="230" y="250" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+    <rect x="270" y="250" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
+
+    <!-- Clapper top stick with stripes -->
+    <g transform="translate(45, 42) rotate(-8, 50, 40)">
+      <rect x="0" y="0" width="290" height="34" rx="8" fill="#1e293b" stroke="#475569" stroke-width="3" />
+      <polygon points="30,0 55,0 35,34 10,34" fill="#f8fafc" />
+      <polygon points="80,0 105,0 85,34 60,34" fill="#f8fafc" />
+      <polygon points="130,0 155,0 135,34 110,34" fill="#f8fafc" />
+      <polygon points="180,0 205,0 185,34 160,34" fill="#f8fafc" />
+      <polygon points="230,0 255,0 235,34 210,34" fill="#f8fafc" />
+    </g>
+  </g>
+
+  <!-- Big Neon Search Lens in Foreground -->
+  <g filter="url(#shadow)">
+    <!-- Magnifier Handle -->
+    <line x1="330" y1="330" x2="435" y2="435" stroke="url(#glowGrad)" stroke-width="32" stroke-linecap="round" />
+    <line x1="330" y1="330" x2="435" y2="435" stroke="#ffffff" stroke-width="12" stroke-linecap="round" opacity="0.8" />
+    
+    <!-- Outer Rim Glow -->
+    <circle cx="245" cy="245" r="125" fill="none" stroke="url(#glowGrad)" stroke-width="20" filter="url(#neon)" opacity="0.6" />
+    
+    <!-- Outer Rim Metallic -->
+    <circle cx="245" cy="245" r="125" fill="url(#lensGrad)" stroke="#ffffff" stroke-width="10" />
+
+    <!-- Lens Glass Reflection Arc -->
+    <path d="M 160 190 A 100 100 0 0 1 295 155" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" opacity="0.75" />
+    <circle cx="160" cy="205" r="10" fill="#ffffff" opacity="0.6" />
+
+    <!-- Cinema Crosshair / Focus Reticle inside lens -->
+    <circle cx="245" cy="245" r="50" fill="none" stroke="#ffffff" stroke-width="3" stroke-dasharray="10 8" opacity="0.5" />
+    <line x1="245" y1="180" x2="245" y2="200" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="245" y1="290" x2="245" y2="310" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="180" y1="245" x2="200" y2="245" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <line x1="290" y1="245" x2="310" y2="245" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    
+    <!-- Center glowing dot -->
+    <circle cx="245" cy="245" r="8" fill="#38bdf8" />
+    <circle cx="245" cy="245" r="4" fill="#ffffff" />
+  </g>
+</svg>
