@@ -24,6 +24,9 @@ session.json
 *.cookie
 *.cookies
 
+# Local helper scripts
+push-to-github.bat
+
 # OS / Editor temporary files
 .DS_Store
 Thumbs.db
