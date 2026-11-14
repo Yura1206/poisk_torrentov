@@ -22,12 +22,33 @@ export const emptyFilters = (): FilterState => ({
 
 export function filterResults(results: TorrentResult[], filters: FilterState): TorrentResult[] {
   return results.filter((item) => {
-    const hdrMatches = filters.dynamicRanges.includes('hdr') && ['hdr', 'hdr10', 'hdr10plus', 'dolby-vision'].includes(item.dynamicRange);
+    const hdrMatches = filters.dynamicRanges.includes('hdr') && ['hdr', 'hdr10', 'hdr10plus'].includes(item.dynamicRange);
+    const itemYears = item.years?.length ? item.years : (item.year !== undefined ? [item.year] : []);
+    const itemSeasons = item.seasons?.length ? item.seasons : (item.season !== undefined ? [item.season] : []);
+
+    let seasonMatches = !filters.seasons.length || filters.seasons.some((s) => itemSeasons.includes(s));
+    if (filters.years?.length && (item.contentType === 'series' || item.contentType === 'reality') && itemSeasons.length > 1 && itemYears.length > 1) {
+      const allowedSeasonsForYears = filters.years
+        .map((y) => {
+          const idx = itemYears.indexOf(y);
+          return idx >= 0 && idx < itemSeasons.length ? itemSeasons[idx] : undefined;
+        })
+        .filter((s): s is number => s !== undefined);
+
+      if (allowedSeasonsForYears.length > 0) {
+        if (filters.seasons.length > 0) {
+          seasonMatches = filters.seasons.some((s) => allowedSeasonsForYears.includes(s));
+        } else {
+          seasonMatches = true;
+        }
+      }
+    }
+
     return (!filters.resolutions.length || filters.resolutions.includes(item.resolution))
       && (!filters.dynamicRanges.length || filters.dynamicRanges.includes(item.dynamicRange) || hdrMatches)
       && (!filters.providers?.length || filters.providers.includes(item.providerId))
-      && (!filters.years?.length || (item.year !== undefined && filters.years.includes(item.year)))
-      && (!filters.seasons.length || (item.season !== undefined && filters.seasons.includes(item.season)))
+      && (!filters.years?.length || filters.years.some((y) => itemYears.includes(y)))
+      && seasonMatches
       && (!filters.parts.length || (item.part !== undefined && filters.parts.includes(item.part)))
       && (!filters.studios.length || filters.studios.some((studio) => item.studios.includes(studio)))
       && (!filters.language || filters.language === 'all' || item.languageStatus === 'confirmed');

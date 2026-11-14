@@ -3,7 +3,8 @@ import type { DynamicRange, Resolution, TorrentResult } from '../../shared/types
 import { emptyFilters, filterResults, sortResults } from './filter-engine';
 import {
   cleanAndDeduplicateVoices,
-  detectContentType, exactTitleMatches, extractDynamicRange, extractPart, extractResolution,
+  correlateSeasonAndYear,
+  detectContentType, exactTitleMatches, extractDnFromMagnet, extractDynamicRange, extractPart, extractResolution,
   extractSeason, extractStudios, isVideoRelease, normalTitleMatches, parseSizeBytes, parseTopicHtml,
   parseTrackerVoiceTags, russianLanguageStatus, titleFromRelease
 } from './metadata';
@@ -122,7 +123,7 @@ describe('фильтрация и сортировка', () => {
     expect(filterResults([film, unknown], filters).map((item) => item.id)).toEqual(['rutor:1']);
   });
   it('совместно применяет фильтры', () => {
-    const filters = { ...emptyFilters(), resolutions: ['2160p'] as Resolution[], dynamicRanges: ['hdr'] as DynamicRange[], seasons: [2], studios: ['LostFilm'], language: 'confirmed' as const };
+    const filters = { ...emptyFilters(), resolutions: ['2160p'] as Resolution[], dynamicRanges: ['dolby-vision'] as DynamicRange[], seasons: [2], studios: ['LostFilm'], language: 'confirmed' as const };
     expect(filterResults([film, series, unknown], filters).map((item) => item.id)).toEqual(['nnm:1']);
   });
   it('сбрасывает фильтры до исходного состояния (показывает все раздачи)', () => {
@@ -174,5 +175,22 @@ describe('parseTopicHtml', () => {
       'Дублированный (Cinema Tone Production)',
       'Дублированный (HDRezka Studio)'
     ]);
+  });
+
+  it('извлекает имя файла dn из magnet-ссылки', () => {
+    const magnet = 'magnet:?xt=urn:btih:abcdef123456&dn=Gangsterland.S02.1080p.WEBRip&tr=udp://tracker';
+    expect(extractDnFromMagnet(magnet)).toBe('Gangsterland.S02.1080p.WEBRip');
+  });
+
+  it('коррелирует сезон и год сериала для одиночных сезонов в интервале лет', () => {
+    const res = correlateSeasonAndYear({
+      contentType: 'series',
+      season: 2,
+      seasons: [2],
+      year: 2025,
+      years: [2025, 2026]
+    });
+    expect(res.year).toBe(2026);
+    expect(res.season).toBe(2);
   });
 });

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AppSettings, RuTrackerAuth } from '../../shared/types';
+import { DEFAULT_BACKUP_WORKER_URL, DEFAULT_CLOUDFLARE_WORKER_URL, setGatewayConfig } from '../providers/provider';
 
 interface PersistedData {
   settings: AppSettings;
@@ -19,6 +20,9 @@ const defaultProviders = (): AppSettings['providers'] => [
 const defaults = (): PersistedData => ({
   settings: {
     showUnconfirmedLanguage: false,
+    bypassBlocking: false,
+    cloudflareWorkerUrl: DEFAULT_CLOUDFLARE_WORKER_URL,
+    backupWorkerUrl: DEFAULT_BACKUP_WORKER_URL,
     providers: defaultProviders(),
     customStudios: [],
     qualityAliases: [],
@@ -53,6 +57,9 @@ export class LocalStorage {
         settings: {
           ...initial.settings,
           ...parsed.settings,
+          bypassBlocking: Boolean(parsed.settings?.bypassBlocking),
+          cloudflareWorkerUrl: parsed.settings?.cloudflareWorkerUrl || DEFAULT_CLOUDFLARE_WORKER_URL,
+          backupWorkerUrl: parsed.settings?.backupWorkerUrl || DEFAULT_BACKUP_WORKER_URL,
           providers: initial.settings.providers.map((provider) => {
             const saved = savedProviders.find((item) => item.id === provider.id);
             return {
@@ -70,6 +77,11 @@ export class LocalStorage {
           magnetAction: parsed.settings?.magnetAction ?? 'ask'
         }
       };
+      setGatewayConfig({
+        bypassBlocking: this.data.settings.bypassBlocking,
+        cloudflareWorkerUrl: this.data.settings.cloudflareWorkerUrl,
+        backupWorkerUrl: this.data.settings.backupWorkerUrl
+      });
     } catch {
       await this.save();
     }
@@ -99,6 +111,9 @@ export class LocalStorage {
 
     this.data.settings = {
       showUnconfirmedLanguage: Boolean(settings.showUnconfirmedLanguage),
+      bypassBlocking: Boolean(settings.bypassBlocking),
+      cloudflareWorkerUrl: (settings.cloudflareWorkerUrl || DEFAULT_CLOUDFLARE_WORKER_URL).trim(),
+      backupWorkerUrl: (settings.backupWorkerUrl || DEFAULT_BACKUP_WORKER_URL).trim(),
       providers: providerDefaults.map((provider) => {
         const saved = settings.providers.find((item) => item.id === provider.id);
         return {
@@ -112,6 +127,11 @@ export class LocalStorage {
       magnetAction: settings.magnetAction || 'ask',
       rutrackerAuth: this.data.settings.rutrackerAuth
     };
+    setGatewayConfig({
+      bypassBlocking: this.data.settings.bypassBlocking,
+      cloudflareWorkerUrl: this.data.settings.cloudflareWorkerUrl,
+      backupWorkerUrl: this.data.settings.backupWorkerUrl
+    });
     await this.save();
     return this.settings;
   }

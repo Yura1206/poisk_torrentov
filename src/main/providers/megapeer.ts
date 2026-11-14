@@ -2,10 +2,11 @@ import * as cheerio from 'cheerio';
 import type { TorrentResult } from '../../shared/types';
 import {
   cleanAndDeduplicateVoices,
-  detectContentType, extractDynamicRange, extractPart, extractResolution, extractSeason, extractStudios,
+  correlateSeasonAndYear,
+  detectContentType, extractDynamicRange, extractPart, extractResolution, extractSeason, extractSeasons, extractStudios,
   formatBytes, isVideoRelease, parseRussianDate, parseSizeBytes, parseTopicHtml, relevanceFor, russianLanguageStatus, titleFromRelease
 } from '../lib/metadata';
-import { encodeWin1251, fetchPage, mapConcurrent, type ProviderSearchOptions, type TorrentProvider } from './provider';
+import { encodeWin1251, fetchPage, mapConcurrent, ProviderError, type ProviderSearchOptions, type TorrentProvider } from './provider';
 
 const BASE_URL = 'https://megapeer.vip';
 
@@ -16,7 +17,15 @@ export class MegapeerProvider implements TorrentProvider {
   async search({ query, page, signal, customStudios, qualityAliases }: ProviderSearchOptions): Promise<TorrentResult[]> {
     const encoded = encodeWin1251(query);
     const url = `${BASE_URL}/browse.php?search=${encoded}&page=${page}`;
-    const html = await fetchPage(url, signal, 'win1251');
+    let html: string;
+    try {
+      html = await fetchPage(url, signal, 'win1251');
+    } catch (err) {
+      if (err instanceof ProviderError && (err.message.includes('404') || err.userMessage?.includes('404'))) {
+        return [];
+      }
+      throw err;
+    }
     const $ = cheerio.load(html);
     const results: TorrentResult[] = [];
 
@@ -47,8 +56,16 @@ export class MegapeerProvider implements TorrentProvider {
       const seeds = positiveNumber(seedText);
       const leeches = positiveNumber(leechText);
 
-      const { title, alternatives, year } = titleFromRelease(rawTitle);
+      const { title, alternatives, year, years } = titleFromRelease(rawTitle);
       const studios = extractStudios(rawTitle, customStudios);
+      const contentType = detectContentType(rawTitle);
+      const correlated = correlateSeasonAndYear({
+        contentType,
+        season: extractSeason(rawTitle),
+        seasons: extractSeasons(rawTitle),
+        year,
+        years
+      });
 
       results.push({
         id: `${this.id}:${itemId ?? href}`,
@@ -58,9 +75,11 @@ export class MegapeerProvider implements TorrentProvider {
         rawTitle,
         title,
         alternativeTitles: alternatives,
-        year,
-        contentType: detectContentType(rawTitle),
-        season: extractSeason(rawTitle),
+        year: correlated.year,
+        years: correlated.years,
+        contentType,
+        season: correlated.season,
+        seasons: correlated.seasons,
         part: extractPart(rawTitle),
         resolution: extractResolution(rawTitle, qualityAliases),
         dynamicRange: extractDynamicRange(rawTitle),

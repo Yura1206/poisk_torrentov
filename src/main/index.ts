@@ -11,10 +11,11 @@ import { NnmClubProvider } from './providers/nnmclub';
 import { MegapeerProvider } from './providers/megapeer';
 import { TorrentKinoProvider } from './providers/torrentkino';
 import { RutrackerProvider } from './providers/rutracker';
-import { APP_USER_AGENT, fetchPage, mapConcurrent, ProviderError } from './providers/provider';
+import { APP_USER_AGENT, DEFAULT_BACKUP_WORKER_URL, DEFAULT_CLOUDFLARE_WORKER_URL, fetchPage, getGatewayConfig, isKnownBlockedTracker, mapConcurrent, ProviderError } from './providers/provider';
 import { cleanAndDeduplicateVoices, parseTopicHtml } from './lib/metadata';
 import { parseAndNormalizeRuTrackerCookies } from './lib/cookies';
-import type { AppSettings, SearchRequest, TorrentResult } from '../shared/types';
+import { autoCorrectTitle, transcribeAudio } from './services/whisper-service';
+import type { AppSettings, GatewayTestResult, SearchRequest, TorrentResult } from '../shared/types';
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 
@@ -155,6 +156,72 @@ function registerIpc(): void {
   ipcMain.handle('poster:resolve', async (_event, title: string, year?: number, pageUrl?: string, contentType?: string) =>
     posterService.resolvePoster(title, year, pageUrl, contentType)
   );
+  ipcMain.handle('ratings:resolve', async (_event, title: string, year?: number) =>
+    posterService.resolveRatings(title, year)
+  );
+  ipcMain.handle('gateways:test', async (_event, workerUrl?: string, backupUrl?: string): Promise<GatewayTestResult> => {
+    const wUrl = (workerUrl || storage.settings.cloudflareWorkerUrl || DEFAULT_CLOUDFLARE_WORKER_URL).trim().replace(/\/+$/, '');
+    const bUrl = (backupUrl || storage.settings.backupWorkerUrl || DEFAULT_BACKUP_WORKER_URL).trim().replace(/\/+$/, '');
+
+    const result: GatewayTestResult = {
+      worker: { ok: false },
+      backup: { ok: false }
+    };
+
+    if (wUrl) {
+      try {
+        const res = await fetch(`${wUrl}/health`, { signal: AbortSignal.timeout(5000) });
+        result.worker = {
+          ok: res.ok,
+          status: res.status,
+          error: res.ok ? undefined : `HTTP ${res.status}`
+        };
+      } catch (err: any) {
+        result.worker = {
+          ok: false,
+          error: err.message || 'Не удалось подключиться'
+        };
+      }
+    }
+
+    if (bUrl) {
+      try {
+        const pingUrl = bUrl.includes('?') ? `${bUrl}&ping=1` : `${bUrl}?ping=1`;
+        const res = await fetch(pingUrl, { signal: AbortSignal.timeout(5000) });
+        const text = await res.text();
+        if (res.ok) {
+          result.backup = { ok: true, status: res.status };
+        } else if (res.status === 404 && text.includes('Requested function was not found')) {
+          result.backup = {
+            ok: false,
+            status: 404,
+            error: 'Функция не найдена в Supabase (требуется deploy)'
+          };
+        } else {
+          result.backup = {
+            ok: false,
+            status: res.status,
+            error: `HTTP ${res.status}`
+          };
+        }
+      } catch (err: any) {
+        result.backup = {
+          ok: false,
+          error: err.message || 'Не удалось подключиться'
+        };
+      }
+    }
+
+    return result;
+  });
+
+  ipcMain.handle('audio:transcribe', async (_event, audioData: number[]) => {
+    return transcribeAudio(audioData);
+  });
+
+  ipcMain.handle('query:correct', async (_event, query: string) => {
+    return autoCorrectTitle(query);
+  });
 }
 
 async function syncRuTrackerCookies(cookieStr: string, sess: Electron.Session): Promise<void> {
@@ -370,7 +437,19 @@ async function downloadTorrent(url: string, title: string): Promise<{ ok: boolea
       headers.Cookie = storage.rutrackerAuth.cookie;
     }
     const fetchFn = isRuTracker ? rutrackerSession.fetch.bind(rutrackerSession) : fetch;
-    const response = await fetchFn(url, { headers, signal: AbortSignal.timeout(20_000) });
+    let response: Response;
+
+    const isBypassActive = Boolean(getGatewayConfig().bypassBlocking);
+    const isBlocked = isKnownBlockedTracker(url);
+
+    if (isBypassActive && isBlocked && !isRuTracker) {
+      const worker = getGatewayConfig().cloudflareWorkerUrl || DEFAULT_CLOUDFLARE_WORKER_URL;
+      const proxyUrl = `${worker.replace(/\/+$/, '')}/?url=${encodeURIComponent(url)}&encoding=raw`;
+      response = await fetch(proxyUrl, { headers, signal: AbortSignal.timeout(15_000) });
+    } else {
+      response = await fetchFn(url, { headers, signal: AbortSignal.timeout(20_000) });
+    }
+
     const contentLength = Number(response.headers.get('content-length') || '0');
     if (!response.ok || (contentLength && contentLength > 20 * 1024 * 1024)) throw new Error('Недопустимый ответ сервера');
     const data = Buffer.from(await response.arrayBuffer());
@@ -443,6 +522,10 @@ async function openRuTrackerLoginWindow(): Promise<{ ok: boolean; username?: str
         .join('; ');
 
       const resolvedUser = detectedUser?.trim() || 'Пользователь RuTracker';
+      if (ruTrackerWorker && !ruTrackerWorker.isDestroyed()) {
+        ruTrackerWorker.destroy();
+        ruTrackerWorker = undefined;
+      }
       await storage.setRuTrackerAuth({
         authorized: true,
         cookie: cookieString,
@@ -525,6 +608,10 @@ async function saveRuTrackerAuth(auth: { cookie?: string; username?: string }): 
   }
 
   const rutrackerSession = session.fromPartition('persist:rutracker');
+  if (ruTrackerWorker && !ruTrackerWorker.isDestroyed()) {
+    ruTrackerWorker.destroy();
+    ruTrackerWorker = undefined;
+  }
   await syncRuTrackerCookies(parsed.cookieHeader, rutrackerSession);
 
   let detectedUser = auth.username?.trim();

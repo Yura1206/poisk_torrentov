@@ -55,4 +55,27 @@ describe('LocalStorage', () => {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('содержит и сохраняет настройки обхода блокировок и шлюзов по умолчанию', async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'torrent-storage-test-'));
+    try {
+      const storage = new LocalStorage(tmpDir);
+      await storage.load();
+
+      expect(storage.settings.bypassBlocking).toBe(false);
+      expect(storage.settings.cloudflareWorkerUrl).toBe('https://torrfilm-proxy.yuroc1206.workers.dev');
+      expect(storage.settings.backupWorkerUrl).toBe('https://acqjmtapqiscohnnejvq.supabase.co/functions/v1/torrfilmproxy');
+
+      await storage.saveSettings({
+        ...storage.settings,
+        bypassBlocking: true,
+        cloudflareWorkerUrl: 'https://custom-worker.workers.dev'
+      });
+
+      expect(storage.settings.bypassBlocking).toBe(true);
+      expect(storage.settings.cloudflareWorkerUrl).toBe('https://custom-worker.workers.dev');
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

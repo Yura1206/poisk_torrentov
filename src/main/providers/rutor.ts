@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import type { TorrentResult } from '../../shared/types';
 import {
   cleanAndDeduplicateVoices,
-  detectContentType, extractDynamicRange, extractPart, extractResolution, extractSeason, extractStudios,
+  correlateSeasonAndYear,
+  detectContentType, extractDynamicRange, extractPart, extractResolution, extractSeason, extractSeasons, extractStudios,
   formatBytes, isVideoRelease, parseRussianDate, parseSizeBytes, parseTopicHtml, relevanceFor, russianLanguageStatus, titleFromRelease
 } from '../lib/metadata';
 import { fetchPage, mapConcurrent, ProviderError, type ProviderSearchOptions, type TorrentProvider } from './provider';
@@ -46,11 +47,20 @@ export class RutorProvider implements TorrentProvider {
       const magnet = row.find('a[href^="magnet:"]').first().attr('href');
       const downloadHref = row.find('a.downgif, a[href*="/download/"]').first().attr('href');
       const torrentUrl = downloadHref ? new URL(downloadHref, baseUrl).toString() : undefined;
-      const { title, alternatives, year } = titleFromRelease(rawTitle);
+      const { title, alternatives, year, years } = titleFromRelease(rawTitle);
       const studios = extractStudios(rawTitle, customStudios);
       const seeds = numberOrUndefined(row.find('.green').first().text());
       const leeches = numberOrUndefined(row.find('.red').first().text());
       const publishedAt = parseRussianDate(cells.eq(0).text().replace(/\s+/g, ' ').trim());
+      const contentType = detectContentType(rawTitle);
+      const correlated = correlateSeasonAndYear({
+        contentType,
+        season: extractSeason(rawTitle),
+        seasons: extractSeasons(rawTitle),
+        year,
+        years
+      });
+
       results.push({
         id: `${this.id}:${itemId ?? pageUrl}`,
         providerId: this.id,
@@ -59,9 +69,11 @@ export class RutorProvider implements TorrentProvider {
         rawTitle,
         title,
         alternativeTitles: alternatives,
-        year,
-        contentType: detectContentType(rawTitle),
-        season: extractSeason(rawTitle),
+        year: correlated.year,
+        years: correlated.years,
+        contentType,
+        season: correlated.season,
+        seasons: correlated.seasons,
         part: extractPart(rawTitle),
         resolution: extractResolution(rawTitle, qualityAliases),
         dynamicRange: extractDynamicRange(rawTitle),

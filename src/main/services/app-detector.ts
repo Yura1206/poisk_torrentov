@@ -312,10 +312,10 @@ export class AppDetector {
       foundPaths.add(defaultMagnetExe.toLowerCase());
       apps.push({
         id: 'system-default',
-        name: 'Торрент-клиент по умолчанию (Windows)',
+        name: 'Торрент-клиент по умолчанию',
         type: 'client',
         path: defaultMagnetExe,
-        description: `Системная программа Windows (${path.basename(defaultMagnetExe)})`
+        description: `Системная программа (${path.basename(defaultMagnetExe)})`
       });
     }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AppSettings, ContentType, DetectedApp, DynamicRange, FilterState, ProviderState, Resolution, SortState, TorrentResult } from '../shared/types';
+import type { AppSettings, ContentType, DetectedApp, DynamicRange, FilmRatings, FilterState, ProviderState, Resolution, SortState, TorrentResult } from '../shared/types';
 import { emptyFilters, filterResults, sortResults } from '../main/lib/filter-engine';
 
 const resolutionLabels: Record<Resolution, string> = {
@@ -12,20 +12,67 @@ const resolutionLabels: Record<Resolution, string> = {
   '2160p': '2160p',
   unknown: 'Не указано'
 };
-const rangeLabels: Record<DynamicRange, string> = { sdr: 'SDR', hdr: 'HDR', hdr10: 'HDR10', hdr10plus: 'HDR10+', 'dolby-vision': 'Dolby Vision', unknown: 'Не указано' };
+const rangeLabels: Record<DynamicRange, string> = { sdr: 'SDR', hdr: 'HDR', hdr10: 'HDR', hdr10plus: 'HDR', 'dolby-vision': 'Dolby Vision', unknown: 'Не указано' };
 const contentLabels: Record<ContentType, string> = { all: 'Всё', movie: 'Фильм', series: 'Сериал', reality: 'Реалити-шоу' };
 const initialSort: SortState = { field: 'relevance', direction: 'desc' };
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 48;
+const globalRatingsCache = new Map<string, FilmRatings | null>();
 
-function formatReleaseSubline(item: { contentType: ContentType; year?: number; season?: number; part?: number }): string {
+function getRatingCacheKey(title: string, year?: number): string {
+  const clean = title
+    .replace(/[\(\[\{].*?[\)\]\}]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  return `${clean}:${year ?? ''}`;
+}
+
+const COUNTRIES_LIST = [
+  'США', 'Россия', 'Франция', 'Великобритания', 'Германия', 'Италия', 'Испания',
+  'Канада', 'Япония', 'Южная Корея', 'Корея', 'Австралия', 'Индия', 'СССР',
+  'Китай', 'Дания', 'Швеция', 'Норвегия', 'Польша', 'Турция', 'Мексика',
+  'Бразилия', 'Ирландия', 'Бельгия', 'Нидерланды', 'Австрия', 'Швейцария',
+  'Финляндия', 'Новая Зеландия', 'Гонконг', 'Тайвань', 'Чехия', 'Венгрия'
+];
+const countryPattern = new RegExp(`(?<![\\p{L}\\p{N}])(${COUNTRIES_LIST.join('|')})(?![\\p{L}\\p{N}])`, 'iu');
+
+function extractCountry(rawTitle?: string): string | undefined {
+  if (!rawTitle) return undefined;
+  const match = rawTitle.match(countryPattern);
+  if (!match) return undefined;
+  const found = match[1];
+  if (found.toUpperCase() === 'США' || found.toUpperCase() === 'СССР') return found.toUpperCase();
+  return found.charAt(0).toUpperCase() + found.slice(1).toLowerCase();
+}
+
+function formatReleaseSubline(
+  item: { contentType: ContentType; year?: number; years?: number[]; season?: number; seasons?: number[]; part?: number },
+  activeYear?: number
+): string {
   let typeWord = 'Фильм';
   if (item.contentType === 'series') typeWord = 'Сериал';
   else if (item.contentType === 'reality') typeWord = 'Телешоу';
 
-  let text = item.year ? `${typeWord} ${item.year} года` : typeWord;
+  let displayYear = item.year;
+  let displaySeason = item.season;
 
-  if (item.season && (item.contentType === 'series' || item.contentType === 'reality')) {
-    text += ` · Сезон ${item.season}`;
+  if (activeYear && (item.contentType === 'series' || item.contentType === 'reality')) {
+    displayYear = activeYear;
+    const itemSeasons = item.seasons && item.seasons.length > 0 ? item.seasons : (item.season ? [item.season] : []);
+    const itemYears = item.years && item.years.length > 0 ? item.years : (item.year ? [item.year] : []);
+    if (itemSeasons.length > 1 && itemYears.length > 1) {
+      const yIdx = itemYears.indexOf(activeYear);
+      if (yIdx >= 0 && yIdx < itemSeasons.length) {
+        displaySeason = itemSeasons[yIdx];
+      }
+    }
+  }
+
+  let text = displayYear ? `${typeWord} ${displayYear} года` : typeWord;
+
+  if (displaySeason && (item.contentType === 'series' || item.contentType === 'reality')) {
+    text += ` · Сезон ${displaySeason}`;
   }
 
   if (item.part) {
@@ -46,9 +93,6 @@ export default function App() {
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
   const [page, setPage] = useState(0);
-  const [hasMoreRemote, setHasMoreRemote] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const remotePage = useRef(0);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -58,8 +102,22 @@ export default function App() {
   const [checkingProviders, setCheckingProviders] = useState(false);
   const resolvedTopicUrls = useRef<Set<string>>(new Set());
   const [detectedApps, setDetectedApps] = useState<DetectedApp[]>([]);
-  const [magnetModal, setMagnetModal] = useState<{ item: TorrentResult; magnet: string } | null>(null);
+  const [magnetModal, setMagnetModal] = useState<{ item: TorrentResult; magnet: string; onlyPlayers?: boolean } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [didYouMean, setDidYouMean] = useState<string | null>(null);
+  const [typingSuggestion, setTypingSuggestion] = useState<string | null>(null);
+  const [dismissedQuery, setDismissedQuery] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => {
+    try {
+      return (localStorage.getItem('viewMode') as 'list' | 'grid') || 'list';
+    } catch {
+      return 'list';
+    }
+  });
+  const [detailTorrent, setDetailTorrent] = useState<TorrentResult | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
   const searchWrapRef = useRef<HTMLDivElement>(null);
   const currentHoveredId = useRef<string | null>(null);
   const [hoverPoster, setHoverPoster] = useState<{
@@ -69,6 +127,8 @@ export default function App() {
     url: string;
   } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resultsViewportRef = useRef<HTMLDivElement>(null);
+  const [sharedHeight, setSharedHeight] = useState<number | undefined>(undefined);
 
   const checkProvidersAvailability = async () => {
     setCheckingProviders(true);
@@ -93,13 +153,6 @@ export default function App() {
 
     const unsubStream = window.torrentApi.onSearchStream?.((payload) => {
       if (requestId.current && requestId.current !== payload.requestId) return;
-      if (payload.batch.length > 0) {
-        setResults((prev) => {
-          const existingIds = new Set(prev.map((i) => i.id));
-          const newItems = payload.batch.filter((i) => !existingIds.has(i.id));
-          return newItems.length ? [...prev, ...newItems] : prev;
-        });
-      }
       setStates((prev) => {
         const without = prev.filter((s) => s.id !== payload.providerState.id);
         return [...without, payload.providerState];
@@ -119,14 +172,18 @@ export default function App() {
   }, [toast]);
 
   useEffect(() => {
-    if (!historyOpen) return;
+    if (!historyOpen && !typingSuggestion) return;
     const handleOutside = (e: MouseEvent) => {
       if (searchWrapRef.current && !searchWrapRef.current.contains(e.target as Node)) {
         setHistoryOpen(false);
+        setTypingSuggestion(null);
       }
     };
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setHistoryOpen(false);
+      if (e.key === 'Escape') {
+        setHistoryOpen(false);
+        setTypingSuggestion(null);
+      }
     };
     document.addEventListener('mousedown', handleOutside);
     document.addEventListener('keydown', handleKey);
@@ -134,11 +191,57 @@ export default function App() {
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [historyOpen]);
+  }, [historyOpen, typingSuggestion]);
 
   useEffect(() => {
     setPage(0);
   }, [filters, sort]);
+
+  useEffect(() => {
+    if (!searched || searching || results.length > 0 || !query || query.length < 3) {
+      setDidYouMean(null);
+      return;
+    }
+    let active = true;
+    void window.torrentApi.correctQuery?.(query).then((corrected) => {
+      if (active && corrected && corrected.toLowerCase() !== query.toLowerCase().trim()) {
+        setDidYouMean(corrected);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [searched, searching, results.length, query]);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 3 || searching || isRecording || isTranscribing) {
+      setTypingSuggestion(null);
+      return;
+    }
+    if (dismissedQuery === trimmed) {
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const corrected = await window.torrentApi.correctQuery?.(trimmed);
+        if (!corrected) {
+          setTypingSuggestion(null);
+          return;
+        }
+        if (corrected.toLowerCase() !== trimmed.toLowerCase()) {
+          setTypingSuggestion(corrected);
+        } else {
+          setTypingSuggestion(null);
+        }
+      } catch {
+        setTypingSuggestion(null);
+      }
+    }, 320);
+
+    return () => window.clearTimeout(timer);
+  }, [query, searching, isRecording, isTranscribing, dismissedQuery]);
 
   const visible = useMemo(() => sortResults(filterResults(results, filters), sort), [results, filters, sort]);
   const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
@@ -147,6 +250,33 @@ export default function App() {
     const start = currentPage * PAGE_SIZE;
     return visible.slice(start, start + PAGE_SIZE);
   }, [visible, currentPage]);
+
+  useEffect(() => {
+    const el = resultsViewportRef.current;
+    if (!el) return;
+    const updateDimensions = () => {
+      if (!resultsViewportRef.current) return;
+      const rect = resultsViewportRef.current.getBoundingClientRect();
+      const bottomReserve = 58;
+      const available = Math.max(380, window.innerHeight - rect.top - bottomReserve);
+      setSharedHeight(available);
+    };
+
+    updateDimensions();
+    const raf = requestAnimationFrame(updateDimensions);
+    const timer = setTimeout(updateDimensions, 100);
+
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateDimensions) : null;
+    if (el.parentElement) ro?.observe(el.parentElement);
+    window.addEventListener('resize', updateDimensions);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      ro?.disconnect();
+      window.removeEventListener('resize', updateDimensions);
+    };
+  }, [results, visible]);
 
   useEffect(() => {
     if (!searched || searching || pagedResults.length === 0) return;
@@ -192,9 +322,28 @@ export default function App() {
     };
   }, [searched, searching, currentPage, pagedResults]);
 
+  useEffect(() => {
+    if (!searched || searching || pagedResults.length === 0) return;
+    const seen = new Set<string>();
+    for (const item of pagedResults) {
+      const key = getRatingCacheKey(item.title, item.year);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      if (!globalRatingsCache.has(key)) {
+        void window.torrentApi.resolveRatings?.(item.title, item.year).then((r) => {
+          globalRatingsCache.set(key, r ?? null);
+        }).catch(() => {});
+      }
+    }
+  }, [searched, searching, currentPage, pagedResults]);
+
   const relevantResultsForSeasons = useMemo(() => {
+    const activeYears = filters.years;
     return results.filter((item) => {
-      if (filters.years?.length && (item.year === undefined || !filters.years.includes(item.year))) return false;
+      if (activeYears && activeYears.length > 0) {
+        const itemYears = item.years && item.years.length > 0 ? item.years : (item.year ? [item.year] : []);
+        if (!itemYears.some((y) => activeYears.includes(y))) return false;
+      }
       if (filters.providers?.length && !filters.providers.includes(item.providerId)) return false;
       if (filters.resolutions.length && !filters.resolutions.includes(item.resolution)) return false;
       return true;
@@ -207,12 +356,47 @@ export default function App() {
 
   const seasonsList = useMemo(() => {
     if (!hasSeriesInActiveView) return [];
+    const activeYears = filters.years;
     return uniqueNumbers(
       relevantResultsForSeasons
         .filter((item) => item.contentType === 'series' || item.contentType === 'reality')
-        .map((item) => item.season)
+        .flatMap((item) => {
+          const itemSeasons = item.seasons && item.seasons.length > 0 ? item.seasons : (item.season ? [item.season] : []);
+          const itemYears = item.years && item.years.length > 0 ? item.years : (item.year ? [item.year] : []);
+          if (activeYears && activeYears.length > 0 && itemSeasons.length > 1 && itemYears.length > 1) {
+            const matched: number[] = [];
+            for (const y of activeYears) {
+              const yIdx = itemYears.indexOf(y);
+              if (yIdx >= 0 && yIdx < itemSeasons.length) {
+                matched.push(itemSeasons[yIdx]);
+              }
+            }
+            return matched;
+          }
+          return itemSeasons;
+        })
     );
-  }, [hasSeriesInActiveView, relevantResultsForSeasons]);
+  }, [hasSeriesInActiveView, relevantResultsForSeasons, filters.years]);
+
+  const relevantResultsForYears = useMemo(() => {
+    const activeSeasons = filters.seasons;
+    return results.filter((item) => {
+      if (activeSeasons && activeSeasons.length > 0) {
+        const itemSeasons = item.seasons && item.seasons.length > 0 ? item.seasons : (item.season ? [item.season] : []);
+        if (!itemSeasons.some((s) => activeSeasons.includes(s))) return false;
+      }
+      if (filters.providers?.length && !filters.providers.includes(item.providerId)) return false;
+      if (filters.resolutions.length && !filters.resolutions.includes(item.resolution)) return false;
+      return true;
+    });
+  }, [results, filters.seasons, filters.providers, filters.resolutions]);
+
+  const yearsList = useMemo(() => {
+    return uniqueNumbers(
+      relevantResultsForYears
+        .flatMap((item) => item.years && item.years.length > 0 ? item.years : (item.year ? [item.year] : []))
+    ).sort((a, b) => b - a);
+  }, [relevantResultsForYears]);
 
   useEffect(() => {
     if (!hasSeriesInActiveView && (filters.seasons?.length ?? 0) > 0) {
@@ -223,8 +407,8 @@ export default function App() {
   const facets = useMemo(() => ({
     seasons: seasonsList,
     parts: uniqueNumbers(results.map((item) => item.part)),
-    years: uniqueNumbers(results.map((item) => item.year)).sort((a, b) => b - a)
-  }), [seasonsList, results]);
+    years: yearsList
+  }), [seasonsList, results, yearsList]);
 
   const availableProviders = useMemo(() => {
     const map = new Map<string, string>();
@@ -242,6 +426,7 @@ export default function App() {
 
   const runSearch = async (selectedQuery = query) => {
     setHistoryOpen(false);
+    setTypingSuggestion(null);
     const clean = selectedQuery.replace(/\s+/gu, ' ').trim();
     if (clean.length < 3) { setToast('Введите минимум три символа для поиска.'); return; }
     if (requestId.current) await window.torrentApi.cancelSearch(requestId.current);
@@ -252,8 +437,6 @@ export default function App() {
     setSearched(true);
     setResults([]);
     setPage(0);
-    remotePage.current = 0;
-    setHasMoreRemote(false);
     setStates([]);
     try {
       const response = await window.torrentApi.search({ requestId: id, query: clean, exact, contentType, page: 0 });
@@ -275,7 +458,6 @@ export default function App() {
           return next;
         });
       }
-      setHasMoreRemote(Boolean(response.hasMore));
       setHistory(await window.torrentApi.getHistory());
     } catch {
       if (requestId.current === id) setToast('Не удалось выполнить поиск. Проверьте состояние источников.');
@@ -284,39 +466,10 @@ export default function App() {
     }
   };
 
-  const loadMoreRemote = async () => {
-    if (searching || loadingMore || !hasMoreRemote) return;
-    setLoadingMore(true);
-    const nextRemote = remotePage.current + 1;
-    const id = crypto.randomUUID();
-    try {
-      const response = await window.torrentApi.search({ requestId: id, query, exact, contentType, page: nextRemote });
-      if (response.cancelled) return;
-      remotePage.current = nextRemote;
-      setHasMoreRemote(Boolean(response.hasMore));
-      setStates(response.providerStates);
-      setResults((previous) => {
-        const existingIds = new Set(previous.map((item) => item.id));
-        const newItems = response.results.filter((item) => !existingIds.has(item.id) && (item.seeds ?? 0) >= 1);
-        if (newItems.length === 0) {
-          setToast('Больше новых раздач с источников не найдено.');
-        } else {
-          setToast(`Загружено ещё ${newItems.length} раздач с трекеров.`);
-        }
-        return [...previous, ...newItems];
-      });
-    } catch {
-      setToast('Не удалось загрузить следующие страницы с источников.');
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
   const cancelSearch = async () => {
     if (requestId.current) await window.torrentApi.cancelSearch(requestId.current);
     requestId.current = null;
     setSearching(false);
-    setLoadingMore(false);
     setToast('Поиск отменён.');
   };
 
@@ -332,7 +485,6 @@ export default function App() {
     setQuery('');
     setFilters(emptyFilters());
     setPage(0);
-    setHasMoreRemote(false);
     setToast('Результаты поиска удалены.');
   };
 
@@ -342,10 +494,12 @@ export default function App() {
     updateFilter(key, [] as never);
   };
 
-  const saveSettings = async (next: AppSettings) => {
+  const saveSettings = async (next: AppSettings, showToast = true) => {
     const saved = await window.torrentApi.saveSettings(next);
     setSettings(saved);
-    setToast('Настройки сохранены.');
+    if (showToast) {
+      setToast('Настройки сохранены.');
+    }
   };
 
   const openSettings = async () => {
@@ -391,15 +545,52 @@ export default function App() {
     }
   };
 
+  const handlePlayInPlayer = async (item: TorrentResult) => {
+    let magnet = item.magnetUrl;
+    if (!magnet && item.pageUrl) {
+      setToast('Получение magnet-ссылки…');
+      const res = await window.torrentApi.resolveMagnet(item.pageUrl);
+      if (res.ok && res.magnet) {
+        magnet = res.magnet;
+        item.magnetUrl = res.magnet;
+      } else {
+        setToast(res.error || 'Не удалось найти magnet-ссылку на странице');
+        return;
+      }
+    }
+    if (!magnet) {
+      setToast('Magnet-ссылка недоступна для этой раздачи.');
+      return;
+    }
+
+    const quickPlayer = settings?.quickPlayerApp || 'ask';
+    if (quickPlayer === 'ask') {
+      setMagnetModal({ item, magnet, onlyPlayers: true });
+    } else {
+      const res = await window.torrentApi.openMagnetWith(magnet, quickPlayer, item.title, false);
+      const appName = detectedApps.find((a) => a.id === quickPlayer)?.name || 'плеере';
+      setToast(res.ok ? `Запуск в ${appName}…` : (res.error || 'Ошибка запуска плеера'));
+    }
+  };
+
   const handleChooseMagnetApp = async (appId: string, remember: boolean) => {
     if (!magnetModal) return;
-    const { magnet, item } = magnetModal;
+    const { magnet, item, onlyPlayers } = magnetModal;
     setMagnetModal(null);
-    const res = await window.torrentApi.openMagnetWith(magnet, appId, item.title, remember);
+    const res = await window.torrentApi.openMagnetWith(magnet, appId, item.title, false);
     if (remember && settings) {
-      setSettings({ ...settings, magnetAction: appId });
+      if (onlyPlayers) {
+        const next = { ...settings, quickPlayerApp: appId };
+        setSettings(next);
+        void window.torrentApi.saveSettings(next);
+      } else {
+        const next = { ...settings, magnetAction: appId };
+        setSettings(next);
+        void window.torrentApi.saveSettings(next);
+      }
     }
-    setToast(res.ok ? 'Раздача запущена в выбранном приложении.' : (res.error || 'Ошибка запуска приложения'));
+    const appName = detectedApps.find((a) => a.id === appId)?.name || 'приложении';
+    setToast(res.ok ? `Раздача запущена в ${appName}.` : (res.error || 'Ошибка запуска приложения'));
   };
 
   const handleRemoveHistoryItem = async (e: React.MouseEvent, item: string) => {
@@ -437,6 +628,226 @@ export default function App() {
     }, 200);
   };
 
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const vadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const cancelVoiceSearch = () => {
+    if (vadTimerRef.current) {
+      clearTimeout(vadTimerRef.current);
+      vadTimerRef.current = null;
+    }
+    audioChunksRef.current = [];
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        // ignore
+      }
+    }
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setAudioLevel(0);
+  };
+
+  const toggleVoiceSearch = async () => {
+    if (isRecording || isTranscribing) {
+      cancelVoiceSearch();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+      audioChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const liveAudioCtx = new AudioContextClass();
+      const source = liveAudioCtx.createMediaStreamSource(stream);
+      const analyser = liveAudioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+
+      const timeData = new Float32Array(analyser.fftSize);
+      let speechDetected = false;
+      let silenceStart: number | null = null;
+      const startTime = Date.now();
+
+      const SILENCE_AFTER_SPEECH_MS = 1200;
+      const MAX_RECORDING_MS = 12000;
+      const NO_SPEECH_TIMEOUT_MS = 6000;
+
+      const checkAudioLevels = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') {
+          return;
+        }
+
+        analyser.getFloatTimeDomainData(timeData);
+        let sum = 0;
+        for (let i = 0; i < timeData.length; i++) {
+          const val = timeData[i];
+          sum += val * val;
+        }
+        const rms = Math.sqrt(sum / timeData.length);
+        setAudioLevel(rms);
+        const now = Date.now();
+
+        const SPEECH_THRESHOLD = 0.015;
+        const SILENCE_THRESHOLD = 0.009;
+
+        if (rms > SPEECH_THRESHOLD) {
+          speechDetected = true;
+          silenceStart = null;
+        } else if (speechDetected && rms < SILENCE_THRESHOLD) {
+          if (silenceStart === null) {
+            silenceStart = now;
+          } else if (now - silenceStart >= SILENCE_AFTER_SPEECH_MS) {
+            if (mediaRecorderRef.current.state === 'recording') {
+              mediaRecorderRef.current.stop();
+              return;
+            }
+          }
+        } else if (!speechDetected && now - startTime >= NO_SPEECH_TIMEOUT_MS) {
+          if (mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop();
+            return;
+          }
+        }
+
+        if (now - startTime >= MAX_RECORDING_MS) {
+          if (mediaRecorderRef.current.state === 'recording') {
+            mediaRecorderRef.current.stop();
+            return;
+          }
+        }
+
+        vadTimerRef.current = setTimeout(checkAudioLevels, 60);
+      };
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        if (vadTimerRef.current) {
+          clearTimeout(vadTimerRef.current);
+          vadTimerRef.current = null;
+        }
+        try {
+          await liveAudioCtx.close();
+        } catch {
+          // ignore
+        }
+        stream.getTracks().forEach((track) => track.stop());
+        setIsRecording(false);
+        setAudioLevel(0);
+
+        if (!speechDetected && audioChunksRef.current.length === 0) {
+          setToast('Речь не обнаружена.');
+          return;
+        }
+
+        setIsTranscribing(true);
+
+        try {
+          const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || 'audio/webm' });
+          const arrayBuffer = await blob.arrayBuffer();
+          const decodeCtx = new AudioContextClass();
+          const decoded = await decodeCtx.decodeAudioData(arrayBuffer);
+          await decodeCtx.close();
+
+          const targetSampleRate = 16000;
+          const numChannels = decoded.numberOfChannels;
+          let monoChannel: Float32Array;
+          if (numChannels === 1) {
+            monoChannel = decoded.getChannelData(0);
+          } else {
+            const ch0 = decoded.getChannelData(0);
+            const ch1 = decoded.getChannelData(1);
+            monoChannel = new Float32Array(ch0.length);
+            for (let i = 0; i < ch0.length; i++) {
+              monoChannel[i] = (ch0[i] + ch1[i]) / 2;
+            }
+          }
+
+          const ratio = decoded.sampleRate / targetSampleRate;
+          const targetLength = Math.round(monoChannel.length / ratio);
+          const resampled = new Float32Array(targetLength);
+          for (let i = 0; i < targetLength; i++) {
+            const originalIndex = Math.min(Math.round(i * ratio), monoChannel.length - 1);
+            resampled[i] = monoChannel[originalIndex];
+          }
+
+          const res = await window.torrentApi.transcribeAudio?.(Array.from(resampled));
+          if (res?.ok && res.text) {
+            const recognized = res.text.replace(/^[.,!?\s]+|[.,!?\s]+$/g, '').trim();
+            if (recognized) {
+              setQuery(recognized);
+              setToast(`Распознано: "${recognized}"`);
+              void runSearch(recognized);
+            } else {
+              setToast('Речь не распознана. Попробуйте ещё раз.');
+            }
+          } else {
+            setToast(res?.error || 'Не удалось распознать речь.');
+          }
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setToast(`Ошибка обработки речи: ${msg}`);
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+
+      mediaRecorder.start(200);
+      setIsRecording(true);
+      vadTimerRef.current = setTimeout(checkAudioLevels, 100);
+    } catch {
+      setToast('Не удалось получить доступ к микрофону. Проверьте разрешения.');
+    }
+  };
+
+  const handleSetViewMode = (mode: 'list' | 'grid') => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem('viewMode', mode);
+    } catch {
+      // ignore
+    }
+  };
+
+  const isAnyModalOpen = settingsOpen || Boolean(magnetModal) || isRecording || isTranscribing || Boolean(detailTorrent);
+  useEffect(() => {
+    if (!isAnyModalOpen) return;
+    document.body.classList.add('modal-open');
+    const preventBgScroll = (e: WheelEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('.settings-modal, .magnet-modal, .auth-modal, .tv-detail-card')) {
+        e.preventDefault();
+      }
+    };
+    const preventBgKeys = (e: KeyboardEvent) => {
+      if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
+        const target = document.activeElement as HTMLElement | null;
+        if (!target?.closest('.settings-modal, .magnet-modal, .auth-modal, .tv-detail-card') && !['input', 'textarea', 'select'].includes(target?.tagName?.toLowerCase() || '')) {
+          e.preventDefault();
+        }
+      }
+    };
+    window.addEventListener('wheel', preventBgScroll, { passive: false });
+    window.addEventListener('keydown', preventBgKeys, { passive: false });
+    return () => {
+      document.body.classList.remove('modal-open');
+      window.removeEventListener('wheel', preventBgScroll);
+      window.removeEventListener('keydown', preventBgKeys);
+    };
+  }, [isAnyModalOpen]);
+
   const handleTitleMouseLeave = () => {
     currentHoveredId.current = null;
     if (hoverTimer.current) {
@@ -449,54 +860,134 @@ export default function App() {
   return <main className="app-shell">
     <header className="topbar">
       <div className="brand">
-        <span className="brand-mark">
-          <AppLogo size={24} />
-        </span>
         <span>Поисковик торрентов</span>
       </div>
-      <div className="search-input-wrap" ref={searchWrapRef}>
-        <form
-          className="search-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setHistoryOpen(false);
-            void runSearch();
-          }}
+      <div className="search-section-wrap" ref={searchWrapRef}>
+        <button
+          type="button"
+          className={`tv-voice-btn ${isRecording ? 'recording' : ''} ${isTranscribing ? 'transcribing' : ''}`}
+          onClick={() => void toggleVoiceSearch()}
+          title={isRecording ? 'Остановить запись' : isTranscribing ? 'Распознавание…' : 'Голосовой поиск (назовите фильм)'}
+          aria-label={isRecording ? 'Остановить запись' : 'Голосовой поиск'}
+          disabled={isTranscribing}
         >
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onFocus={() => { if (history.length > 0) setHistoryOpen(true); }}
-            onDoubleClick={() => { if (history.length > 0) setHistoryOpen(true); }}
-            placeholder="Название фильма, сериала или шоу"
-            aria-label="Поисковый запрос"
-            autoComplete="off"
-          />
-          {history.length > 0 && (
-            <button
-              type="button"
-              className="history-toggle-btn"
-              onClick={() => setHistoryOpen((prev) => !prev)}
-              title={historyOpen ? 'Закрыть историю' : 'История поисков'}
-              aria-label={historyOpen ? 'Закрыть историю' : 'История поисков'}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={`history-chevron ${historyOpen ? 'open' : ''}`}
+          <svg viewBox="0 0 24 24" width="27" height="27" fill="currentColor">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+          </svg>
+        </button>
+
+        <div className="search-input-wrap">
+          <form
+            className="search-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setHistoryOpen(false);
+              setTypingSuggestion(null);
+              void runSearch();
+            }}
+          >
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                if (historyOpen) setHistoryOpen(false);
+              }}
+              onKeyDown={(event) => {
+                if (typingSuggestion) {
+                  if (event.key === 'Tab') {
+                    event.preventDefault();
+                    const targetQuery = typingSuggestion;
+                    setQuery(targetQuery);
+                    setTypingSuggestion(null);
+                    void runSearch(targetQuery);
+                  } else if (event.key === 'Escape') {
+                    setDismissedQuery(query.trim());
+                    setTypingSuggestion(null);
+                  }
+                }
+              }}
+              onFocus={() => { if (history.length > 0 && !typingSuggestion) setHistoryOpen(true); }}
+              onDoubleClick={() => { if (history.length > 0) setHistoryOpen(true); }}
+              placeholder="Название фильма, сериала или шоу"
+              aria-label="Поисковый запрос"
+              autoComplete="off"
+            />
+            {history.length > 0 && (
+              <button
+                type="button"
+                className="history-toggle-btn"
+                onClick={() => setHistoryOpen((prev) => !prev)}
+                title={historyOpen ? 'Закрыть историю' : 'История поисков'}
+                aria-label={historyOpen ? 'Закрыть историю' : 'История поисков'}
               >
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </button>
-          )}
-          <button className="primary" type="submit" disabled={searching}>{searching ? 'Ищем…' : 'Найти'}</button>
-        </form>
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={`history-chevron ${historyOpen ? 'open' : ''}`}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+            )}
+            <button className="primary" type="submit" disabled={searching}>{searching ? 'Ищем…' : 'Найти'}</button>
+          </form>
+
+        {typingSuggestion && !historyOpen && (
+          <div className="search-suggestion-bar" role="alert">
+            <div className="suggestion-content">
+              <span className="suggestion-icon" aria-hidden="true">💡</span>
+              <span className="suggestion-text">
+                Возможно, вы имели в виду:{' '}
+                <button
+                  type="button"
+                  className="suggestion-highlight-btn"
+                  onClick={() => {
+                    const targetQuery = typingSuggestion;
+                    setQuery(targetQuery);
+                    setTypingSuggestion(null);
+                    void runSearch(targetQuery);
+                  }}
+                  title="Искать исправленное название"
+                >
+                  {typingSuggestion}
+                </button>
+              </span>
+            </div>
+            <div className="suggestion-actions">
+              <button
+                type="button"
+                className="suggestion-btn apply"
+                onClick={() => {
+                  const targetQuery = typingSuggestion;
+                  setQuery(targetQuery);
+                  setTypingSuggestion(null);
+                  void runSearch(targetQuery);
+                }}
+                title="Искать по исправленному названию (клавиша Tab)"
+              >
+                Искать «{typingSuggestion}»
+              </button>
+              <button
+                type="button"
+                className="suggestion-btn dismiss"
+                onClick={() => {
+                  setDismissedQuery(query.trim());
+                  setTypingSuggestion(null);
+                }}
+                title="Оставить введённый вариант и закрыть подсказку (Esc)"
+              >
+                Оставить мой вариант
+              </button>
+            </div>
+          </div>
+        )}
 
         {historyOpen && history.length > 0 && (
           <div className="search-history-dropdown" role="listbox">
@@ -541,8 +1032,14 @@ export default function App() {
             </div>
           </div>
         )}
+        </div>
       </div>
-      <button className="icon-button" type="button" onClick={() => void openSettings()} title="Настройки" aria-label="Настройки">⚙</button>
+      <button className="icon-button" type="button" onClick={() => void openSettings()} title="Настройки" aria-label="Настройки">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
     </header>
 
     <section className="query-controls" aria-label="Режим поиска">
@@ -554,93 +1051,140 @@ export default function App() {
       <StatusSummary providerStates={providerCheckStates} searching={searching} checking={checkingProviders} />
     </section>
 
-    <div className="sticky-controls">
-      <section className="filter-panel">
-        <div className="filter-groups-left">
-          <FilterGroup title="Разрешение видео" values={(['480p', '720p', '1080p', '2160p'] as Resolution[])} labels={resolutionLabels} active={filters.resolutions} onToggle={(value) => updateFilter('resolutions', filters.resolutions.includes(value) ? [] : [value])} />
-          <FilterGroup title="Динамический диапазон" values={(['sdr', 'hdr', 'dolby-vision'] as DynamicRange[])} labels={rangeLabels} active={filters.dynamicRanges} onToggle={(value) => updateFilter('dynamicRanges', filters.dynamicRanges.includes(value) ? [] : [value])} />
-          {availableProviders.length > 1 && (
-            <FilterGroup
-              title="Источник"
-              values={availableProviders.map((p) => p.id)}
-              labels={providerLabels}
-              active={filters.providers ?? []}
-              onToggle={(value) => updateFilter('providers', (filters.providers ?? []).includes(value) ? [] : [value])}
-            />
-          )}
-          {facets.years.length > 0 && (
-            <YearDropdown
-              years={facets.years}
-              activeYear={filters.years?.[0]}
-              onSelect={(year) => updateFilter('years', year ? [year] : [])}
-            />
-          )}
-          {facets.seasons.length > 0 && <FilterGroup title="Сезон" values={facets.seasons} labels={Object.fromEntries(facets.seasons.map((season) => [season, `S${season}`]))} active={filters.seasons} onToggle={(value) => updateFilter('seasons', toggle(filters.seasons, value))} />}
-          {facets.parts.length > 0 && <FilterGroup title="Часть" values={facets.parts} labels={Object.fromEntries(facets.parts.map((part) => [part, `Часть ${part}`]))} active={filters.parts} onToggle={(value) => updateFilter('parts', toggle(filters.parts, value))} />}
-        </div>
-        <button
-          type="button"
-          className="clear-search-btn"
-          onClick={clearSearchResults}
-          disabled={!searched && results.length === 0 && !query}
-          title="Очистить поисковый запрос и результаты"
-        >
-          Удалить результаты
-        </button>
-      </section>
-
-      <section className="results-toolbar">
-        <div>
-          <strong>{visible.length}</strong> из {results.length} раздач
-          {totalPages > 1 && ` (страница ${currentPage + 1} из ${totalPages}, показаны ${currentPage * PAGE_SIZE + 1}–${Math.min((currentPage + 1) * PAGE_SIZE, visible.length)})`}
-          {searched && results.length === 0 ? ' — ничего не найдено' : ''}
-        </div>
-        <div className="sort-controls">
-          <label>
-            Сортировка{' '}
-            <select
-              value={sort.field}
-              onChange={(event) => {
-                const nextField = event.target.value as SortState['field'];
-                setSort({
-                  field: nextField,
-                  direction: nextField === 'title' ? 'asc' : 'desc'
-                });
-              }}
-            >
-              <option value="relevance">По релевантности</option>
-              <option value="seeds">По сидам</option>
-              <option value="size">По размеру</option>
-              <option value="published">По дате публикации</option>
-              <option value="updated">По дате обновления</option>
-              <option value="title">По названию</option>
-            </select>
-          </label>
+    {results.length > 0 && (
+      <div className="sticky-controls">
+        <section className="filter-panel">
+          <div className="filter-groups-left">
+            <FilterGroup title="Разрешение видео" values={(['480p', '720p', '1080p', '2160p'] as Resolution[])} labels={resolutionLabels} active={filters.resolutions} onToggle={(value) => updateFilter('resolutions', filters.resolutions.includes(value) ? [] : [value])} />
+            <FilterGroup title="Динамический диапазон" values={(['sdr', 'hdr', 'dolby-vision'] as DynamicRange[])} labels={rangeLabels} active={filters.dynamicRanges} onToggle={(value) => updateFilter('dynamicRanges', filters.dynamicRanges.includes(value) ? [] : [value])} />
+            {availableProviders.length > 0 && (
+              <FilterGroup
+                title="Источник"
+                values={availableProviders.map((p) => p.id)}
+                labels={providerLabels}
+                active={filters.providers ?? []}
+                onToggle={(value) => updateFilter('providers', (filters.providers ?? []).includes(value) ? [] : [value])}
+              />
+            )}
+            {facets.years.length > 0 && (
+              <YearDropdown
+                years={facets.years}
+                activeYear={filters.years?.[0]}
+                onSelect={(year) => updateFilter('years', year ? [year] : [])}
+              />
+            )}
+            {facets.seasons.length > 0 && <FilterGroup title="Сезон" values={facets.seasons} labels={Object.fromEntries(facets.seasons.map((season) => [season, `S${season}`]))} active={filters.seasons} onToggle={(value) => updateFilter('seasons', toggle(filters.seasons, value))} />}
+            {facets.parts.length > 0 && <FilterGroup title="Часть" values={facets.parts} labels={Object.fromEntries(facets.parts.map((part) => [part, `Часть ${part}`]))} active={filters.parts} onToggle={(value) => updateFilter('parts', toggle(filters.parts, value))} />}
+          </div>
           <button
             type="button"
-            className="direction"
-            onClick={() => setSort((previous) => ({ ...previous, direction: previous.direction === 'asc' ? 'desc' : 'asc' }))}
-            title="Изменить направление"
+            className="clear-search-btn"
+            onClick={clearSearchResults}
+            disabled={!searched && results.length === 0 && !query}
+            title="Очистить поисковый запрос и результаты"
           >
-            {sort.direction === 'asc' ? '↑' : '↓'}
+            Удалить результаты
           </button>
-        </div>
-      </section>
+        </section>
 
-      <ActiveFilters filters={filters} providerLabels={providerLabels} onClear={clearFilter} onReset={() => setFilters(emptyFilters())} />
-    </div>
-    <ResultsTable
-      results={pagedResults}
-      onToast={setToast}
-      onOpenMagnet={handleOpenMagnet}
-      onTitleMouseEnter={handleTitleMouseEnter}
-      onTitleMouseLeave={handleTitleMouseLeave}
-    />
-    {searched && !searching && hasMoreRemote && results.length > 0 && (
-      <div className="load-more-wrap">
-        <button type="button" className="load-more-btn" onClick={() => void loadMoreRemote()} disabled={loadingMore}>
-          {loadingMore ? 'Загрузка дополнительных раздач…' : 'Загрузить больше результатов'}
-        </button>
+        <section className="results-toolbar">
+          <div className="results-toolbar-left">
+            <span className="results-count">
+              <strong style={{ display: 'inline-block', marginRight: `${String(visible.length).length <= 2 ? 8 : String(visible.length).length === 3 ? 10 : 13}px` }}>
+                {visible.length}
+              </strong>
+              <span style={{ display: 'inline-block', marginRight: '5px' }}>из</span>
+              {results.length} раздач
+              {totalPages > 1 && ` (страница ${currentPage + 1} из ${totalPages}, показаны ${currentPage * PAGE_SIZE + 1}–${Math.min((currentPage + 1) * PAGE_SIZE, visible.length)})`}
+              {searched && results.length === 0 ? ' — ничего не найдено' : ''}
+            </span>
+            <ActiveFilters filters={filters} providerLabels={providerLabels} onClear={clearFilter} onReset={() => setFilters(emptyFilters())} />
+          </div>
+          <div className="results-toolbar-right">
+            <div className="view-mode-toggle segmented" role="group" aria-label="Режим отображения">
+              <button
+                type="button"
+                className={viewMode === 'list' ? 'selected' : ''}
+                onClick={() => handleSetViewMode('list')}
+                title="Отображение списком"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <line x1="3" y1="6" x2="21" y2="6"/>
+                  <line x1="3" y1="12" x2="21" y2="12"/>
+                  <line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+                <span>Список</span>
+              </button>
+              <button
+                type="button"
+                className={viewMode === 'grid' ? 'selected' : ''}
+                onClick={() => handleSetViewMode('grid')}
+                title="Отображение таблицей (плитки с постерами)"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+                  <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+                  <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+                  <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+                </svg>
+                <span>Таблица</span>
+              </button>
+            </div>
+            <div className="sort-controls">
+              <label>
+                Сортировка{' '}
+                <select
+                  value={sort.field}
+                  onChange={(event) => {
+                    const nextField = event.target.value as SortState['field'];
+                    setSort({
+                      field: nextField,
+                      direction: nextField === 'title' ? 'asc' : 'desc'
+                    });
+                  }}
+                >
+                  <option value="relevance">По релевантности</option>
+                  <option value="seeds">По сидам</option>
+                  <option value="size">По размеру</option>
+                  <option value="published">По дате публикации</option>
+                  <option value="updated">По дате обновления</option>
+                  <option value="title">По названию</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="direction"
+                onClick={() => setSort((previous) => ({ ...previous, direction: previous.direction === 'asc' ? 'desc' : 'asc' }))}
+                title="Изменить направление"
+              >
+                {sort.direction === 'asc' ? '↑' : '↓'}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    )}
+    {(searched || results.length > 0) && (
+      <div className="results-viewport" ref={resultsViewportRef}>
+        {viewMode === 'grid' ? (
+          <ResultsGrid
+            results={pagedResults}
+            activeYear={filters.years?.[0]}
+            onSelect={(item) => setDetailTorrent(item)}
+            onPlayInPlayer={handlePlayInPlayer}
+            sharedHeight={sharedHeight}
+          />
+        ) : (
+          <ResultsTable
+            results={pagedResults}
+            activeYear={filters.years?.[0]}
+            onToast={setToast}
+            onOpenMagnet={handleOpenMagnet}
+            onTitleMouseEnter={handleTitleMouseEnter}
+            onTitleMouseLeave={handleTitleMouseLeave}
+            sharedHeight={sharedHeight}
+          />
+        )}
       </div>
     )}
     {searched && totalPages > 1 && (
@@ -691,7 +1235,18 @@ export default function App() {
         isInitial
       />
     )}
-    {searched && !searching && results.length === 0 && <EmptyState icon="◌" title="Раздачи не найдены" description="Источники могли быть недоступны или не содержать русскоязычных метаданных. Проверьте их в настройках." />}
+    {searched && !searching && results.length === 0 && (
+      <EmptyState
+        icon="◌"
+        title="Раздачи не найдены"
+        description="Источники могли быть недоступны или не содержать русскоязычных метаданных. Проверьте их в настройках."
+        suggestedQuery={didYouMean}
+        onApplySuggestion={(corrected) => {
+          setQuery(corrected);
+          void runSearch(corrected);
+        }}
+      />
+    )}
     {searched && !searching && results.length > 0 && visible.length === 0 && <EmptyState icon="⊘" title="Фильтры скрыли все результаты" description="Сбросьте отдельный фильтр выше или очистите их все." />}
     {settingsOpen && settings && (
       <SettingsDialog
@@ -710,8 +1265,26 @@ export default function App() {
       <MagnetActionModal
         item={magnetModal.item}
         apps={detectedApps}
+        onlyPlayers={magnetModal.onlyPlayers}
         onClose={() => setMagnetModal(null)}
         onSelect={handleChooseMagnetApp}
+      />
+    )}
+    {detailTorrent && (
+      <TorrentDetailModal
+        item={detailTorrent}
+        activeYear={filters.years?.[0]}
+        onClose={() => setDetailTorrent(null)}
+        onOpenMagnet={handleOpenMagnet}
+        onToast={setToast}
+      />
+    )}
+    {(isRecording || isTranscribing) && (
+      <VoiceSearchModal
+        isRecording={isRecording}
+        isTranscribing={isTranscribing}
+        audioLevel={audioLevel}
+        onCancel={cancelVoiceSearch}
       />
     )}
     <PosterTooltip data={hoverPoster} />
@@ -866,21 +1439,626 @@ function ActiveFilters({
   return <div className="active-filters"><span>Активные фильтры:</span>{current.map(([key, label]) => <button type="button" key={key} onClick={() => onClear(key)}>{label} <b>×</b></button>)}<button className="reset" type="button" onClick={onReset}>Сбросить все</button></div>;
 }
 
+function ResultsGrid({
+  results,
+  activeYear,
+  onSelect,
+  onPlayInPlayer,
+  sharedHeight
+}: {
+  results: TorrentResult[];
+  activeYear?: number;
+  onSelect(item: TorrentResult): void;
+  onPlayInPlayer(item: TorrentResult): void;
+  sharedHeight?: number;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isScrollingRef = useRef(false);
+  const GAP = 22;
+  const PADDING_V = 28;
+  const [cardHeight, setCardHeight] = useState<number>(() => {
+    const initH = sharedHeight ?? 700;
+    return Math.max(220, Math.floor((initH - GAP - PADDING_V) / 2));
+  });
+  const [containerHeight, setContainerHeight] = useState<number | undefined>(sharedHeight);
+
+  useEffect(() => {
+    if (sharedHeight) {
+      setContainerHeight(sharedHeight);
+      setCardHeight(Math.max(220, Math.floor((sharedHeight - GAP - PADDING_V) / 2)));
+    }
+  }, [sharedHeight]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const bottomReserve = 58;
+      const available = Math.max(380, window.innerHeight - rect.top - bottomReserve);
+      const computedCard = Math.max(220, Math.floor((available - GAP - PADDING_V) / 2));
+      const computedContainer = computedCard * 2 + GAP + PADDING_V;
+      setCardHeight(computedCard);
+      setContainerHeight(computedContainer);
+    };
+
+    measure();
+    const raf1 = requestAnimationFrame(measure);
+    const timer = setTimeout(measure, 150);
+
+    const observer = new ResizeObserver(() => {
+      measure();
+    });
+    if (el.parentElement) {
+      observer.observe(el.parentElement);
+    }
+    window.addEventListener('resize', measure);
+
+    return () => {
+      cancelAnimationFrame(raf1);
+      clearTimeout(timer);
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [results]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) < 10) return;
+      e.preventDefault();
+      if (isScrollingRef.current) return;
+
+      const rowDistance = (cardHeight + GAP) * 2;
+      const currentScroll = el.scrollTop;
+      const currentScreen = Math.round(currentScroll / rowDistance);
+      const targetScreen = e.deltaY > 0 ? currentScreen + 1 : currentScreen - 1;
+      const maxScroll = el.scrollHeight - el.clientHeight;
+      const maxScreen = Math.ceil(maxScroll / rowDistance);
+      const clampedScreen = Math.max(0, Math.min(maxScreen, targetScreen));
+      const targetScroll = Math.min(maxScroll, clampedScreen * rowDistance);
+
+      isScrollingRef.current = true;
+      el.scrollTo({ top: targetScroll, behavior: 'smooth' });
+      setTimeout(() => {
+        isScrollingRef.current = false;
+      }, 350);
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [cardHeight, GAP]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="results-grid-container"
+      style={containerHeight ? { height: `${containerHeight}px`, maxHeight: `${containerHeight}px` } : undefined}
+    >
+      <div className="results-grid">
+        {results.map((item) => (
+          <GridCard
+            key={item.id}
+            item={item}
+            cardHeight={cardHeight}
+            activeYear={activeYear}
+            onSelect={() => onSelect(item)}
+            onPlayInPlayer={() => onPlayInPlayer(item)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GridCard({
+  item,
+  cardHeight,
+  activeYear,
+  onSelect,
+  onPlayInPlayer
+}: {
+  item: TorrentResult;
+  cardHeight?: number;
+  activeYear?: number;
+  onSelect(): void;
+  onPlayInPlayer(): void;
+}) {
+  const [posterUrl, setPosterUrl] = useState<string | null>(null);
+  const [imgLoaded, setImgLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void window.torrentApi.resolvePoster(item.title, item.year, item.pageUrl, item.contentType).then((url) => {
+      if (active && url) {
+        setPosterUrl(url);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [item.title, item.year, item.pageUrl, item.contentType]);
+
+  return (
+    <div
+      className="results-grid-card"
+      style={cardHeight ? { height: `${cardHeight}px` } : undefined}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      title={`Открыть карточку «${item.title}»`}
+    >
+      <div className="card-poster-wrap">
+        {posterUrl ? (
+          <img
+            src={posterUrl}
+            alt={item.title}
+            className={`card-poster-img ${imgLoaded ? 'loaded' : ''}`}
+            onLoad={() => setImgLoaded(true)}
+            onError={() => setPosterUrl(null)}
+          />
+        ) : (
+          <div className="card-poster-fallback">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+              <line x1="7" y1="2" x2="7" y2="22"/>
+              <line x1="17" y1="2" x2="17" y2="22"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <line x1="2" y1="7" x2="7" y2="7"/>
+              <line x1="2" y1="17" x2="7" y2="17"/>
+              <line x1="17" y1="17" x2="22" y2="17"/>
+              <line x1="17" y1="7" x2="22" y2="7"/>
+            </svg>
+            <span className="fallback-type">{formatReleaseSubline(item, activeYear)}</span>
+          </div>
+        )}
+
+        <div className="card-top-chips">
+          {item.resolution !== 'unknown' && (
+            <span className={`card-badge quality ${item.resolution === '2160p' ? 'uhd' : ''}`}>
+              {resolutionLabels[item.resolution]}
+            </span>
+          )}
+          <span className="card-badge provider">
+            {item.providerName}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          className="card-quick-play-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPlayInPlayer();
+          }}
+          title="Проиграть в плеере"
+          aria-label="Проиграть в плеере"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="card-caption">
+        <h4 className="card-title" title={item.title}>{item.title}</h4>
+        <div className="card-subline">
+          <span>{formatReleaseSubline(item, activeYear)}</span>
+          <span className="card-size">{item.sizeLabel}</span>
+        </div>
+        <div className="card-meta-line">
+          <div className="card-meta-left">
+            {item.dynamicRange && item.dynamicRange !== 'unknown' && (
+              <span className={`card-range-badge ${item.dynamicRange === 'dolby-vision' ? 'dv' : item.dynamicRange === 'sdr' ? 'sdr' : 'hdr'}`}>
+                {rangeLabels[item.dynamicRange]}
+              </span>
+            )}
+          </div>
+          <div className="card-meta-right">
+            <span className="card-seeds" title={`${item.seeds ?? 0} сидов`}>
+              ▲ {item.seeds ?? 0}
+            </span>
+            {item.leeches !== undefined && (
+              <span className="card-leeches" title={`${item.leeches} личей`}>
+                ▼ {item.leeches}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TorrentDetailModal({
+  item,
+  activeYear,
+  onClose,
+  onOpenMagnet,
+  onToast
+}: {
+  item: TorrentResult;
+  activeYear?: number;
+  onClose(): void;
+  onOpenMagnet(item: TorrentResult): void;
+  onToast(msg: string): void;
+}) {
+  const cacheKey = getRatingCacheKey(item.title, item.year);
+  const [posterUrl, setPosterUrl] = useState<string | null>(null);
+  const [ratings, setRatings] = useState<FilmRatings | null>(() => globalRatingsCache.get(cacheKey) ?? null);
+  const [ratingsLoading, setRatingsLoading] = useState(() => !globalRatingsCache.has(cacheKey));
+
+  useEffect(() => {
+    let active = true;
+    void window.torrentApi.resolvePoster(item.title, item.year, item.pageUrl, item.contentType).then((url) => {
+      if (active && url) {
+        setPosterUrl(url);
+      }
+    });
+    return () => { active = false; };
+  }, [item.title, item.year, item.pageUrl, item.contentType]);
+
+  useEffect(() => {
+    let active = true;
+    if (globalRatingsCache.has(cacheKey)) {
+      setRatings(globalRatingsCache.get(cacheKey) ?? null);
+      setRatingsLoading(false);
+      return;
+    }
+    setRatingsLoading(true);
+    void window.torrentApi.resolveRatings?.(item.title, item.year).then((r) => {
+      globalRatingsCache.set(cacheKey, r ?? null);
+      if (active) {
+        setRatings(r ?? null);
+        setRatingsLoading(false);
+      }
+    });
+    return () => { active = false; };
+  }, [cacheKey, item.title, item.year]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  const handleCopyMagnet = async () => {
+    let magnet = item.magnetUrl;
+    if (!magnet && item.pageUrl) {
+      onToast('Получение magnet-ссылки…');
+      const res = await window.torrentApi.resolveMagnet(item.pageUrl);
+      if (res.ok && res.magnet) {
+        magnet = res.magnet;
+        item.magnetUrl = res.magnet;
+      } else {
+        onToast(res.error || 'Не удалось найти magnet-ссылку на странице');
+        return;
+      }
+    }
+    if (magnet) {
+      const res = await window.torrentApi.copyMagnet(magnet);
+      onToast(res.ok ? 'Magnet-ссылка скопирована.' : res.error || 'Не удалось скопировать magnet-ссылку');
+    } else {
+      onToast('Magnet-ссылка недоступна для этой раздачи.');
+    }
+  };
+
+  const displayCountry = ratings?.country || extractCountry(item.rawTitle);
+
+  return (
+    <div className="tv-detail-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="tv-detail-card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={item.title}
+      >
+        {posterUrl && (
+          <>
+            <div
+              className="tv-media-backdrop-bg"
+              style={{ backgroundImage: `url(${posterUrl})` }}
+            />
+            <div className="tv-media-backdrop-gradient" />
+          </>
+        )}
+        <button type="button" className="tv-modal-close" onClick={onClose} aria-label="Закрыть">×</button>
+
+        <div className="tv-detail-left">
+          {posterUrl ? (
+            <img src={posterUrl} alt={item.title} className="tv-detail-poster" />
+          ) : (
+            <div className="tv-detail-poster-fallback">
+              <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+                <line x1="7" y1="2" x2="7" y2="22"/>
+                <line x1="17" y1="2" x2="17" y2="22"/>
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <line x1="2" y1="7" x2="7" y2="7"/>
+                <line x1="2" y1="17" x2="7" y2="17"/>
+                <line x1="17" y1="17" x2="22" y2="17"/>
+                <line x1="17" y1="7" x2="22" y2="7"/>
+              </svg>
+              <span>Постер не найден</span>
+            </div>
+          )}
+        </div>
+
+        <div className="tv-detail-right">
+          <div className="tv-detail-meta-top">
+            <span className="tv-badge-type">{contentLabels[item.contentType]}</span>
+            {item.year && <span className="tv-meta-dot">• {item.year}</span>}
+            {displayCountry && <span className="tv-meta-dot">• {displayCountry}</span>}
+          </div>
+
+          <h2 className="tv-detail-title">{item.title}</h2>
+          <div className="tv-detail-subline">{formatReleaseSubline(item, activeYear)}</div>
+
+          <div className="tv-specs-grid">
+            <div className="tv-spec-item">
+              <span className="tv-spec-label">Разрешение</span>
+              <span className="tv-spec-val highlight">{resolutionLabels[item.resolution]}</span>
+            </div>
+            <div className="tv-spec-item">
+              <span className="tv-spec-label">Динамический диапазон</span>
+              <span className="tv-spec-val">{rangeLabels[item.dynamicRange]}</span>
+            </div>
+            <div className="tv-spec-item">
+              <span className="tv-spec-label">Размер</span>
+              <span className="tv-spec-val">{item.sizeLabel}</span>
+            </div>
+            <div className="tv-spec-item">
+              <span className="tv-spec-label">Раздают / Качают</span>
+              <span className="tv-spec-val">
+                <span className="seeds">▲ {item.seeds ?? 0}</span> / <span className="leeches">▼ {item.leeches ?? 0}</span>
+              </span>
+            </div>
+            <div className="tv-spec-item">
+              <span className="tv-spec-label">Опубликовано</span>
+              <span className="tv-spec-val">{formatDate(item.publishedAt)}</span>
+            </div>
+            <div className="tv-spec-item">
+              <span className="tv-spec-label">Источник</span>
+              <span className="tv-spec-val provider">{item.providerName}</span>
+            </div>
+          </div>
+
+          <div className="tv-ratings-box">
+            <div className="tv-rating-card kp">
+              <div className="tv-rating-header">
+                <span className="tv-rating-logo kp">КИНОПОИСК</span>
+                {ratings?.kpVotes && <span className="tv-rating-votes">{ratings.kpVotes} оценок</span>}
+              </div>
+              <div className="tv-rating-score-row">
+                <div className="tv-rating-score-left">
+                  <span className="tv-rating-star kp">★</span>
+                  <span className={`tv-rating-num ${parseFloat(ratings?.kp || '0') >= 7 ? 'good' : ''}`}>
+                    {ratingsLoading ? '…' : (ratings?.kp || '—')}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="tv-rating-reviews-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const url = ratings?.kpReviewsUrl || `https://www.kinopoisk.ru/index.php?kp_query=${encodeURIComponent(item.title)}`;
+                    void window.torrentApi.openExternal(url);
+                  }}
+                  title="Открыть отзывы на Кинопоиске в браузере"
+                >
+                  Отзывы
+                </button>
+              </div>
+            </div>
+
+            <div className="tv-rating-card imdb">
+              <div className="tv-rating-header">
+                <span className="tv-rating-logo imdb">IMDb</span>
+                {ratings?.imdbVotes && <span className="tv-rating-votes">{ratings.imdbVotes} оценок</span>}
+              </div>
+              <div className="tv-rating-score-row">
+                <div className="tv-rating-score-left">
+                  <span className="tv-rating-star imdb">★</span>
+                  <span className={`tv-rating-num ${parseFloat(ratings?.imdb || '0') >= 7 ? 'good' : ''}`}>
+                    {ratingsLoading ? '…' : (ratings?.imdb || '—')}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="tv-rating-reviews-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const url = ratings?.imdbReviewsUrl || `https://www.imdb.com/find/?q=${encodeURIComponent(item.title)}&s=tt`;
+                    void window.torrentApi.openExternal(url);
+                  }}
+                  title="Открыть отзывы на IMDb в браузере"
+                >
+                  Отзывы
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="tv-action-buttons">
+            <button
+              type="button"
+              className="tv-btn tv-btn-primary"
+              onClick={() => {
+                onOpenMagnet(item);
+              }}
+              title="Запустить воспроизведение или скачивание"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              <span>Открыть раздачу</span>
+            </button>
+
+            <button
+              type="button"
+              className="tv-btn tv-btn-secondary"
+              onClick={() => void handleCopyMagnet()}
+              title="Скопировать magnet-ссылку в буфер обмена"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              <span>Копировать Magnet</span>
+            </button>
+
+            <button
+              type="button"
+              className="tv-btn tv-btn-secondary"
+              onClick={() => void window.torrentApi.openExternal(item.pageUrl)}
+              title="Открыть в браузере страницу на трекере"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+              <span>Перейти на трекер</span>
+            </button>
+
+            {item.torrentUrl ? (
+              <button
+                type="button"
+                className="tv-btn tv-btn-secondary"
+                onClick={async () => {
+                  const res = await window.torrentApi.downloadTorrent(item.torrentUrl!, item.title);
+                  onToast(res.ok ? 'Торрент-файл сохранён.' : res.error || 'Ошибка загрузки .torrent');
+                }}
+                title="Скачать торрент-файл"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span>Скачать торрент-файл</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="tv-btn tv-btn-secondary disabled"
+                disabled
+                title="Прямая ссылка на торрент-файл недоступна"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span>Скачать торрент-файл</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ResultsTable({
   results,
+  activeYear,
   onToast,
   onOpenMagnet,
   onTitleMouseEnter,
-  onTitleMouseLeave
+  onTitleMouseLeave,
+  sharedHeight
 }: {
   results: TorrentResult[];
+  activeYear?: number;
   onToast(value: string): void;
   onOpenMagnet(item: TorrentResult): void;
   onTitleMouseEnter(item: TorrentResult, e: React.MouseEvent): void;
   onTitleMouseLeave(): void;
+  sharedHeight?: number;
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const HEADER_HEIGHT = 38;
+  const BORDER_V = 2;
+  const [tableHeight, setTableHeight] = useState<number | undefined>(sharedHeight);
+  const [rowHeight, setRowHeight] = useState<number>(() => {
+    const initH = sharedHeight ?? 700;
+    const target = initH - HEADER_HEIGHT - BORDER_V;
+    const rows = Math.max(3, Math.round(target / 48));
+    return target / rows;
+  });
+
+  useEffect(() => {
+    if (sharedHeight) {
+      setTableHeight(sharedHeight);
+      const target = sharedHeight - HEADER_HEIGHT - BORDER_V;
+      const rows = Math.max(3, Math.round(target / 48));
+      setRowHeight(target / rows);
+    }
+  }, [sharedHeight]);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+
+    const updateDimensions = () => {
+      if (!wrapRef.current) return;
+      const rect = wrapRef.current.getBoundingClientRect();
+      const bottomReserve = 58;
+      const available = Math.max(380, window.innerHeight - rect.top - bottomReserve);
+      const targetContent = available - HEADER_HEIGHT - BORDER_V;
+      const wholeRows = Math.max(3, Math.round(targetContent / 48));
+      const dynamicRowHeight = targetContent / wholeRows;
+      setRowHeight(dynamicRowHeight);
+      setTableHeight(available);
+    };
+
+    updateDimensions();
+    const raf1 = requestAnimationFrame(updateDimensions);
+    const timer = setTimeout(updateDimensions, 150);
+
+    const parent = el.parentElement;
+    let ro: ResizeObserver | null = null;
+    if (parent && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => {
+        updateDimensions();
+      });
+      ro.observe(parent);
+    }
+
+    window.addEventListener('resize', updateDimensions);
+    return () => {
+      cancelAnimationFrame(raf1);
+      clearTimeout(timer);
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', updateDimensions);
+    };
+  }, [results]);
+
   return (
-    <div className="table-wrap" hidden={results.length === 0}>
+    <div
+      ref={wrapRef}
+      className="table-wrap"
+      hidden={results.length === 0}
+      style={tableHeight ? {
+        height: `${tableHeight}px`,
+        maxHeight: `${tableHeight}px`,
+        ['--row-height' as string]: `${rowHeight}px`
+      } : undefined}
+    >
       <table>
         <thead>
           <tr>
@@ -898,6 +2076,7 @@ function ResultsTable({
             <ResultRow
               key={item.id}
               item={item}
+              activeYear={activeYear}
               onToast={onToast}
               onOpenMagnet={onOpenMagnet}
               onTitleMouseEnter={(e) => onTitleMouseEnter(item, e)}
@@ -912,12 +2091,14 @@ function ResultsTable({
 
 function ResultRow({
   item,
+  activeYear,
   onToast,
   onOpenMagnet,
   onTitleMouseEnter,
   onTitleMouseLeave
 }: {
   item: TorrentResult;
+  activeYear?: number;
   onToast(value: string): void;
   onOpenMagnet(item: TorrentResult): void;
   onTitleMouseEnter(e: React.MouseEvent): void;
@@ -969,7 +2150,7 @@ function ResultRow({
           </a>
         </strong>
         <span className="subline">
-          {formatReleaseSubline(item)}
+          {formatReleaseSubline(item, activeYear)}
         </span>
       </td>
       <td>
@@ -1062,11 +2243,13 @@ function PosterTooltip({
 function MagnetActionModal({
   item,
   apps,
+  onlyPlayers,
   onClose,
   onSelect
 }: {
   item: TorrentResult;
   apps: DetectedApp[];
+  onlyPlayers?: boolean;
   onClose: () => void;
   onSelect: (appId: string, remember: boolean) => Promise<void>;
 }) {
@@ -1074,6 +2257,7 @@ function MagnetActionModal({
   const clients = apps.filter((a) => a.type === 'client');
   const players = apps.filter((a) => a.type === 'player');
   const hasDedicatedClients = clients.length > 0;
+  const hasDedicatedPlayers = players.length > 0;
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -1081,11 +2265,16 @@ function MagnetActionModal({
         className="magnet-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Выбор приложения для раздачи"
+        aria-label={onlyPlayers ? 'Выбор плеера для просмотра' : 'Выбор приложения для раздачи'}
         onClick={(e) => e.stopPropagation()}
       >
         <header>
-          <h2>Открыть раздачу</h2>
+          <div>
+            <h2>{onlyPlayers ? 'Выбор плеера для просмотра' : 'Открыть раздачу'}</h2>
+            {onlyPlayers && (
+              <div className="magnet-modal-subtitle">(можно изменить в настройках)</div>
+            )}
+          </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="Закрыть">×</button>
         </header>
         <div className="magnet-modal-body">
@@ -1096,38 +2285,42 @@ function MagnetActionModal({
             </div>
           </div>
 
-          <div className="magnet-section">
-            <div className="magnet-section-title">Скачать через торрент-клиент</div>
-            {clients.map((app) => (
-              <button
-                key={app.id}
-                type="button"
-                className="magnet-app-btn"
-                onClick={() => void onSelect(app.id, remember)}
-              >
-                <span className="magnet-app-icon">⇩</span>
-                <div className="magnet-app-info">
-                  <div className="magnet-app-name">{app.name}</div>
-                  <div className="magnet-app-desc">{app.description}</div>
+          {!onlyPlayers && (
+            <div className="magnet-section">
+              <div className="magnet-section-title">Скачать через торрент-клиент</div>
+              {clients.map((app) => (
+                <button
+                  key={app.id}
+                  type="button"
+                  className="magnet-app-btn"
+                  onClick={() => void onSelect(app.id, remember)}
+                >
+                  <span className="magnet-app-icon">⇩</span>
+                  <div className="magnet-app-info">
+                    <div className="magnet-app-name">{app.name}</div>
+                    <div className="magnet-app-desc">{app.description}</div>
+                  </div>
+                </button>
+              ))}
+              {!hasDedicatedClients && (
+                <div className="magnet-not-found-box">
+                  <div className="not-found-header">
+                    <span className="not-found-icon">ℹ</span>
+                    <strong>Подходящих торрент-клиентов на устройстве не обнаружено</strong>
+                  </div>
+                  <p className="not-found-text">
+                    <b>Рекомендация:</b> Если хотите скачивать видео, рекомендуем установить бесплатный торрент-клиент <b>qBittorrent</b> или <b>uTorrent</b>!
+                  </p>
                 </div>
-              </button>
-            ))}
-            {!hasDedicatedClients && (
-              <div className="magnet-not-found-box">
-                <div className="not-found-header">
-                  <span className="not-found-icon">ℹ</span>
-                  <strong>Подходящих торрент-клиентов на устройстве не обнаружено</strong>
-                </div>
-                <p className="not-found-text">
-                  <b>Рекомендация:</b> Если хотите скачивать видео, рекомендуем установить бесплатный торрент-клиент <b>qBittorrent</b> или <b>uTorrent</b>!
-                </p>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           <div className="magnet-section">
-            <div className="magnet-section-title">Смотреть онлайн (без скачивания)</div>
-            {players.length > 0 ? (
+            <div className="magnet-section-title">
+              {onlyPlayers ? 'Установленные видеоплееры' : 'Смотреть онлайн (без скачивания)'}
+            </div>
+            {hasDedicatedPlayers ? (
               players.map((app) => (
                 <button
                   key={app.id}
@@ -1146,11 +2339,23 @@ function MagnetActionModal({
               <div className="magnet-not-found-box">
                 <div className="not-found-header">
                   <span className="not-found-icon">ℹ</span>
-                  <strong>Подходящих плееров для онлайн-просмотра на устройстве не обнаружено</strong>
+                  <strong>Подходящих видеоплееров не обнаружено</strong>
                 </div>
                 <p className="not-found-text">
-                  <b>Рекомендация:</b> Если хотите посмотреть видео онлайн без предварительного скачивания, установите сервер <b>TorrServer</b> и медиаплеер <b>VLC</b> или <b>MPC-HC (K-Lite Codec Pack)</b>!
+                  <b>Рекомендация:</b> Для онлайн-просмотра торрентов установите <b>TorrServer</b>, <b>VLC Player</b> или <b>PotPlayer</b>!
                 </p>
+                <button
+                  type="button"
+                  className="magnet-app-btn"
+                  style={{ marginTop: '10px' }}
+                  onClick={() => void onSelect('client:default', remember)}
+                >
+                  <span className="magnet-app-icon">↗</span>
+                  <div className="magnet-app-info">
+                    <div className="magnet-app-name">Открыть в плеере по умолчанию системы</div>
+                    <div className="magnet-app-desc">Попытаться открыть ссылку через системный плеер</div>
+                  </div>
+                </button>
               </div>
             )}
           </div>
@@ -1162,7 +2367,16 @@ function MagnetActionModal({
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
             />
-            <span>Запомнить выбор (не спрашивать больше)</span>
+            <div className="magnet-remember-text">
+              <span>
+                {onlyPlayers
+                  ? 'Запомнить этот плеер для быстрого старта'
+                  : 'Запомнить выбор (не спрашивать больше)'}
+              </span>
+              {onlyPlayers && (
+                <span className="magnet-remember-hint">(можно изменить в настройках)</span>
+              )}
+            </div>
           </label>
           <button className="secondary" type="button" onClick={onClose}>Отмена</button>
         </footer>
@@ -1175,18 +2389,44 @@ function EmptyState({
   icon,
   title,
   description,
-  isInitial
+  isInitial,
+  suggestedQuery,
+  onApplySuggestion
 }: {
   icon: string | React.ReactNode;
   title: string;
   description?: string;
   isInitial?: boolean;
+  suggestedQuery?: string | null;
+  onApplySuggestion?: (q: string) => void;
 }) {
   return (
     <div className={`empty ${isInitial ? 'empty-initial' : ''}`}>
       <span className="empty-icon">{icon}</span>
       <h2>{title}</h2>
       {description ? <p>{description}</p> : null}
+      {suggestedQuery && (
+        <div style={{ marginTop: '16px', fontSize: '15px', color: '#cbd5e1' }}>
+          Возможно, вы имели в виду:{' '}
+          <button
+            type="button"
+            onClick={() => onApplySuggestion?.(suggestedQuery)}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              color: '#38bdf8',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+              fontWeight: 650,
+              fontSize: '15.5px'
+            }}
+          >
+            {suggestedQuery}
+          </button>
+          ?
+        </div>
+      )}
     </div>
   );
 }
@@ -1208,14 +2448,44 @@ function SettingsDialog({
   checking: boolean;
   onCheckProviders(): Promise<ProviderState[] | undefined>;
   onClose(): void;
-  onSave(settings: AppSettings): Promise<void>;
+  onSave(settings: AppSettings, showToast?: boolean): Promise<void>;
   onSettingsUpdated(settings: AppSettings): void;
   onToast(value: string): void;
 }) {
   const [draft, setDraft] = useState(settings);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [gatewayTestResults, setGatewayTestResults] = useState<{
+    worker?: { ok: boolean; status?: number; error?: string };
+    backup?: { ok: boolean; status?: number; error?: string };
+  } | null>(null);
+  const [testingGateways, setTestingGateways] = useState(false);
+
+  const handleTestGateways = async () => {
+    if (!window.torrentApi.testGateways) return;
+    setTestingGateways(true);
+    try {
+      const res = await window.torrentApi.testGateways();
+      setGatewayTestResults(res);
+      if (res.worker?.ok && res.backup?.ok) {
+        onToast('Оба шлюза успешно ответили!');
+      } else if (res.worker?.ok) {
+        onToast('Основной шлюз (Cloudflare) доступен.');
+      } else {
+        onToast('Проверка шлюзов завершена с ошибками.');
+      }
+    } catch {
+      onToast('Ошибка при выполнении проверки шлюзов.');
+    } finally {
+      setTestingGateways(false);
+    }
+  };
 
   const testProviders = async () => {
+    await onSave({
+      ...draft,
+      customStudios: draft.customStudios || [],
+      qualityAliases: draft.qualityAliases || []
+    }, false);
     await onCheckProviders();
   };
 
@@ -1223,6 +2493,7 @@ function SettingsDialog({
     const updated = await window.torrentApi.getSettings();
     setDraft(updated);
     onSettingsUpdated(updated);
+    await onCheckProviders();
   };
 
   const save = async () => {
@@ -1230,7 +2501,7 @@ function SettingsDialog({
       ...draft,
       customStudios: draft.customStudios || [],
       qualityAliases: draft.qualityAliases || []
-    });
+    }, true);
     onClose();
   };
 
@@ -1238,18 +2509,21 @@ function SettingsDialog({
     <div className="modal-backdrop" role="presentation">
       <section className="settings-modal" role="dialog" aria-modal="true" aria-label="Настройки">
         <header>
-          <div>
-            <h2>Настройки</h2>
-            <p>Управляйте публичными источниками и параметрами поиска.</p>
-          </div>
+          <h2>Настройки</h2>
           <button className="icon-button" type="button" onClick={onClose} aria-label="Закрыть">×</button>
         </header>
 
         <div className="setting-block">
           <div className="setting-head">
-            <h3>Источники</h3>
-            <button className="secondary" type="button" onClick={() => void testProviders()} disabled={checking}>
-              {checking ? 'Проверяем…' : 'Проверить доступность'}
+            <h3>Трекеры</h3>
+            <button
+              className="primary"
+              type="button"
+              onClick={() => void testProviders()}
+              disabled={checking}
+              style={{ width: '175px', minWidth: '175px', textAlign: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              {checking ? 'Проверяем…' : 'Проверить трекеры'}
             </button>
           </div>
           {draft.providers.map((provider) => {
@@ -1308,10 +2582,96 @@ function SettingsDialog({
 
         <div className="setting-block">
           <div className="setting-head">
-            <h3>Действие для magnet-ссылок</h3>
+            <h3>Обход блокировок трекеров в РФ</h3>
+            <button
+              className="primary"
+              type="button"
+              onClick={() => void handleTestGateways()}
+              disabled={testingGateways || !draft.bypassBlocking}
+              style={{ width: '175px', minWidth: '175px', textAlign: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              {testingGateways ? 'Проверяем…' : 'Проверить шлюзы'}
+            </button>
           </div>
           <p className="setting-description">
-            Выберите, какое приложение запускать при клике на магнет-ссылку: торрент-клиент для скачивания или плеер для онлайн-просмотра.
+            Использование прокси-шлюзов для доступа к трекерам
+          </p>
+
+          <div style={{ display: 'flex', gap: '14px', marginTop: '16px', marginBottom: '14px' }}>
+            <button
+              type="button"
+              className={draft.bypassBlocking ? 'primary' : 'secondary'}
+              style={{
+                width: '165px',
+                padding: '10px 18px',
+                fontSize: '13.5px',
+                fontWeight: draft.bypassBlocking ? 650 : 500,
+                textAlign: 'center',
+                borderRadius: '8px',
+                border: draft.bypassBlocking ? '1px solid #3b82f6' : '1px solid #334155'
+              }}
+              onClick={async () => {
+                const updated = { ...draft, bypassBlocking: true };
+                setDraft(updated);
+                await onSave({
+                  ...updated,
+                  customStudios: updated.customStudios || [],
+                  qualityAliases: updated.qualityAliases || []
+                }, false);
+              }}
+            >
+              Включить обход
+            </button>
+            <button
+              type="button"
+              className={!draft.bypassBlocking ? 'primary' : 'secondary'}
+              style={{
+                width: '165px',
+                padding: '10px 18px',
+                fontSize: '13.5px',
+                fontWeight: !draft.bypassBlocking ? 650 : 500,
+                textAlign: 'center',
+                borderRadius: '8px',
+                border: !draft.bypassBlocking ? '1px solid #3b82f6' : '1px solid #334155'
+              }}
+              onClick={async () => {
+                const updated = { ...draft, bypassBlocking: false };
+                setDraft(updated);
+                await onSave({
+                  ...updated,
+                  customStudios: updated.customStudios || [],
+                  qualityAliases: updated.qualityAliases || []
+                }, false);
+              }}
+            >
+              Выключить обход
+            </button>
+          </div>
+
+          {draft.bypassBlocking && gatewayTestResults && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 14px', background: '#0b0f17', border: '1px solid #1e293b', borderRadius: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                <span style={{ color: '#cbd5e1' }}>🥇 Основной шлюз (Cloudflare):</span>
+                <span style={{ fontWeight: 650, color: gatewayTestResults.worker?.ok ? '#22c55e' : '#ef4444' }}>
+                  {gatewayTestResults.worker?.ok ? '✓ Доступен' : `✗ ${gatewayTestResults.worker?.error || 'Недоступен'}`}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                <span style={{ color: '#cbd5e1' }}>🥈 Резервный шлюз (Supabase):</span>
+                <span style={{ fontWeight: 650, color: gatewayTestResults.backup?.ok ? '#22c55e' : '#ef4444' }}>
+                  {gatewayTestResults.backup?.ok ? '✓ Доступен' : `✗ ${gatewayTestResults.backup?.error || 'Недоступен'}`}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="setting-block">
+          <div className="setting-head">
+            <h3>Действие для магнет-ссылок</h3>
+          </div>
+          <p className="setting-description">
+            Выберите, какое приложение запускать при клике на магнет-ссылку!
           </p>
           <div className="select-row">
             <select
@@ -1352,6 +2712,29 @@ function SettingsDialog({
           )}
         </div>
 
+        <div className="setting-block">
+          <div className="setting-head">
+            <h3>Плеер для быстрого старта просмотра</h3>
+          </div>
+          <p className="setting-description">
+            Видеоплеер для быстрого воспроизведения по кнопке на постере раздачи
+          </p>
+          <div className="select-row">
+            <select
+              value={draft.quickPlayerApp || 'ask'}
+              onChange={(e) => setDraft({ ...draft, quickPlayerApp: e.target.value })}
+              className="settings-select"
+            >
+              <option value="ask">Всегда спрашивать (окно выбора плеера)</option>
+              {detectedApps
+                .filter((a) => a.type === 'player')
+                .map((app) => (
+                  <option key={app.id} value={app.id}>{app.name}</option>
+                ))}
+            </select>
+          </div>
+        </div>
+
         <footer>
           <div />
           <div>
@@ -1376,6 +2759,7 @@ function RuTrackerAuthModal({ auth, onClose, onSuccess, onToast }: { auth?: AppS
   const [cookie, setCookie] = useState(auth?.cookie || '');
   const [username, setUsername] = useState(auth?.username || '');
   const [loading, setLoading] = useState(false);
+  const [showCookie, setShowCookie] = useState(false);
 
   const handleBrowserLogin = async () => {
     setLoading(true);
@@ -1506,12 +2890,24 @@ function RuTrackerAuthModal({ auth, onClose, onSuccess, onToast }: { auth?: AppS
             </button>
           </div>
           <div className="form-field">
-            <label>Строка Cookie (bb_data, bb_session или вся скопированная таблица):</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+              <label style={{ margin: 0 }}>Строка Cookie (bb_data, bb_session или вся скопированная таблица):</label>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setShowCookie((prev) => !prev)}
+                style={{ padding: '2px 8px', fontSize: '12px', color: '#60a5fa', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                title={showCookie ? 'Замаскировать строку Cookie' : 'Показать значение Cookie'}
+              >
+                {showCookie ? '👁️ Скрыть Cookie' : '👁️‍🗨️ Показать Cookie'}
+              </button>
+            </div>
             <textarea
               value={cookie}
               onChange={(e) => setCookie(e.target.value)}
               placeholder="Вставьте сюда bb_data, bb_session или просто скопируйте всю таблицу из вкладки Cookies (Ctrl+A -> Ctrl+C)"
               rows={3}
+              className={showCookie ? '' : 'masked-cookie'}
             />
           </div>
           <div className="form-field">
@@ -1569,49 +2965,89 @@ function getPageList(current: number, total: number): Array<number | '...'> {
   return [0, '...', current - 1, current, current + 1, '...', total - 1];
 }
 
-function AppLogo({ size = 24 }: { size?: number }) {
+function AppLogo({ size = 34 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 512 512" width={size} height={size} style={{ display: 'block' }} aria-hidden="true">
-      <defs>
-        <linearGradient id="logoBg" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#1e293b" />
-          <stop offset="100%" stopColor="#0f172a" />
-        </linearGradient>
-        <linearGradient id="logoBorder" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#38bdf8" />
-          <stop offset="50%" stopColor="#2563eb" />
-          <stop offset="100%" stopColor="#10b981" />
-        </linearGradient>
-        <linearGradient id="logoLens" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#1e3a8a" stopOpacity="0.85" />
-          <stop offset="100%" stopColor="#064e3b" stopOpacity="0.9" />
-        </linearGradient>
-      </defs>
-      <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#logoBg)" stroke="url(#logoBorder)" strokeWidth="12" />
-      <g transform="translate(48, 60) rotate(-6, 200, 180)">
-        <rect x="50" y="80" width="280" height="200" rx="18" fill="#131d2e" stroke="#2563eb" strokeWidth="4" />
-        <rect x="70" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
-        <rect x="110" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
-        <rect x="150" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
-        <rect x="190" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
-        <rect x="230" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
-        <rect x="270" y="92" width="24" height="18" rx="4" fill="#38bdf8" opacity="0.9" />
-        <path d="M 50 140 L 330 140" stroke="#1e3a8a" strokeWidth="4" />
-        <rect x="50" y="42" width="280" height="42" rx="10" fill="#0b0f17" stroke="#2563eb" strokeWidth="4" />
-        <polygon points="65,44 85,44 70,82 50,82" fill="#38bdf8" />
-        <polygon points="115,44 135,44 120,82 100,82" fill="#38bdf8" />
-        <polygon points="165,44 185,44 170,82 150,82" fill="#38bdf8" />
-        <polygon points="215,44 235,44 220,82 200,82" fill="#38bdf8" />
-        <polygon points="265,44 285,44 270,82 250,82" fill="#38bdf8" />
-        <polygon points="315,44 330,44 320,82 300,82" fill="#38bdf8" />
-      </g>
-      <g>
-        <circle cx="290" cy="270" r="110" fill="url(#logoLens)" stroke="#38bdf8" strokeWidth="10" />
-        <line x1="375" y1="355" x2="455" y2="435" stroke="#38bdf8" strokeWidth="26" strokeLinecap="round" />
-        <line x1="375" y1="355" x2="455" y2="435" stroke="#1d4ed8" strokeWidth="14" strokeLinecap="round" />
-        <path d="M 235 220 A 75 75 0 0 1 330 200" fill="none" stroke="#22c55e" strokeWidth="10" strokeLinecap="round" opacity="0.85" />
-        <polygon points="275,245 320,270 275,295" fill="#22c55e" />
-      </g>
-    </svg>
+    <img
+      src="./icon.png"
+      alt="Поисковик торрентов"
+      width={size}
+      height={size}
+      style={{ display: 'block', borderRadius: '8px', objectFit: 'contain' }}
+      draggable={false}
+    />
+  );
+}
+
+function VoiceSearchModal({
+  isRecording,
+  isTranscribing,
+  audioLevel,
+  onCancel
+}: {
+  isRecording: boolean;
+  isTranscribing: boolean;
+  audioLevel: number;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div className="voice-modal-backdrop" onClick={onCancel} role="presentation">
+      <div className="voice-modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Голосовой поиск">
+        <button type="button" className="voice-modal-close" onClick={onCancel} aria-label="Закрыть">×</button>
+
+        <div className="voice-orb-wrapper">
+          <div
+            className={`voice-orb-glow ${isRecording ? 'active' : ''}`}
+            style={{
+              transform: isRecording ? `scale(${1 + Math.min(audioLevel * 4, 0.45)})` : 'scale(1)'
+            }}
+          />
+          <div className={`voice-orb ${isRecording ? 'recording' : ''} ${isTranscribing ? 'transcribing' : ''}`}>
+            <svg
+              width="44"
+              height="44"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="voice-orb-icon"
+            >
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="22" />
+            </svg>
+          </div>
+        </div>
+
+        <h3 className="voice-modal-title">
+          {isTranscribing ? 'Распознавание речи…' : 'Слушаю…'}
+        </h3>
+        <p className="voice-modal-subtitle">
+          {isTranscribing ? 'Умная обработка и автоисправление названия' : 'Назовите фильм, сериал или телешоу!'}
+        </p>
+
+        {isRecording && (
+          <div className="voice-wave-bars">
+            <span className="wave-bar bar-1" style={{ height: `${Math.max(8, Math.min(38, 12 + audioLevel * 140))}px` }} />
+            <span className="wave-bar bar-2" style={{ height: `${Math.max(12, Math.min(50, 16 + audioLevel * 200))}px` }} />
+            <span className="wave-bar bar-3" style={{ height: `${Math.max(14, Math.min(46, 18 + audioLevel * 180))}px` }} />
+            <span className="wave-bar bar-4" style={{ height: `${Math.max(8, Math.min(34, 12 + audioLevel * 120))}px` }} />
+          </div>
+        )}
+
+        <button type="button" className="voice-modal-cancel-btn" onClick={onCancel}>
+          Отмена
+        </button>
+      </div>
+    </div>
   );
 }

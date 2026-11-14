@@ -1,8 +1,11 @@
 import type { TorrentResult } from '../../shared/types';
 import {
+  correlateSeasonAndYear,
+  extractDnFromMagnet,
   extractDynamicRange,
   extractResolution,
   extractSeason,
+  extractSeasons,
   formatBytes,
   isVideoRelease,
   parseSizeBytes,
@@ -137,26 +140,87 @@ export class TorrentKinoProvider implements TorrentProvider {
           }
         }
 
+        // Fetch /api/sources/{id} for seeded torrents (fast pure JSON) so dynamic range and magnet are 100% accurate
+        const sourceMap = new Map<number, { video?: string; magnetUrl?: string }>();
+        const relevantTorrents = torrents.filter((t) => (t.seeds ?? 0) >= 1);
+        const toFetchSources = relevantTorrents.length > 0 ? relevantTorrents.slice(0, 12) : torrents.slice(0, 6);
+
+        if (toFetchSources.length > 0) {
+          await mapConcurrent(toFetchSources, 6, async (t) => {
+            try {
+              const sourceUrl = `${BASE_URL}/api/sources/${t.id}`;
+              const sourceText = await fetchPage(sourceUrl, AbortSignal.timeout(4000), {
+                headers: { Accept: 'application/json' }
+              });
+              const sourceObj = JSON.parse(sourceText) as { video?: string; magnetUrl?: string };
+              if (sourceObj) {
+                sourceMap.set(t.id, {
+                  video: sourceObj.video || '',
+                  magnetUrl: sourceObj.magnetUrl || ''
+                });
+              }
+            } catch (_) {}
+          });
+        }
+
+        const filmYears: number[] = [];
+        if (Array.isArray(film.releaseYears)) {
+          for (const ry of film.releaseYears) {
+            if (ry && typeof ry === 'object') {
+              if (ry.start) filmYears.push(ry.start);
+              if (ry.end && ry.end !== ry.start) filmYears.push(ry.end);
+            }
+          }
+        }
+        if (!filmYears.length && film.year) filmYears.push(film.year);
+
         for (const t of torrents) {
-          const rawTitle = [
+          const sourceDetails = sourceMap.get(t.id);
+          const videoText = sourceDetails?.video || '';
+          const dnName = extractDnFromMagnet(sourceDetails?.magnetUrl);
+          const qualityParts = [t.quality, t.qualityLabel].filter(Boolean).join(' ');
+          const defaultRawTitle = [
             film.title,
             film.originalTitle ? `/ ${film.originalTitle}` : '',
             film.year ? `(${film.year})` : '',
             t.seasonStart ? `[Сезон ${t.seasonStart}${t.seasonEnd && t.seasonEnd !== t.seasonStart ? '-' + t.seasonEnd : ''}]` : '',
-            t.qualityLabel || t.quality
+            qualityParts
           ].filter(Boolean).join(' ');
+          const rawTitle = dnName || defaultRawTitle;
 
-          if (!isVideoRelease(rawTitle)) continue;
+          if (!isVideoRelease(rawTitle) && !isVideoRelease(defaultRawTitle)) continue;
 
-          const parsedTitle = titleFromRelease(rawTitle);
+          const parsedTitle = titleFromRelease(defaultRawTitle);
           const title = parsedTitle.title;
           const alternatives = Array.from(new Set([...parsedTitle.alternatives, ...(film.originalTitle ? [film.originalTitle] : [])]));
           const sizeBytes = parseSizeBytes(t.size);
           const sizeLabel = sizeBytes ? formatBytes(sizeBytes) : (t.size || 'Не указан');
           const isSeries = film.contentType === 'tv-series' || film.contentType === 'mini-series' || t.seasonStart != null;
-          const season = t.seasonStart ?? extractSeason(rawTitle);
-          const resolution = extractResolution(t.qualityLabel || t.quality || '', qualityAliases);
-          const dynamicRange = extractDynamicRange(t.qualityLabel || '');
+          const season = t.seasonStart ?? extractSeason(rawTitle) ?? extractSeason(defaultRawTitle);
+          const seasons = (t.seasonStart != null && t.seasonEnd != null && t.seasonEnd >= t.seasonStart)
+            ? Array.from({ length: t.seasonEnd - t.seasonStart + 1 }, (_, i) => (t.seasonStart as number) + i)
+            : (extractSeasons(rawTitle).length ? extractSeasons(rawTitle) : extractSeasons(defaultRawTitle));
+
+          const techString = [dnName, videoText, t.qualityLabel, t.quality, rawTitle, defaultRawTitle].filter(Boolean).join(' ');
+          let resolution = extractResolution(techString, qualityAliases);
+          if (resolution === 'unknown' && t.quality) {
+            const q = t.quality.toLowerCase();
+            if (q === '4k' || q === 'uhd') resolution = '2160p';
+            else if (q === '1080p') resolution = '1080p';
+            else if (q === '720p') resolution = '720p';
+            else if (q === '480p') resolution = '480p';
+            else if (q === '576p') resolution = '576p';
+          }
+          const dynamicRange = extractDynamicRange(techString);
+
+          const yearsList = parsedTitle.years?.length ? parsedTitle.years : (filmYears.length ? filmYears : (film.year ? [film.year] : []));
+          const correlated = correlateSeasonAndYear({
+            contentType: isSeries ? 'series' : 'movie',
+            season,
+            seasons,
+            year: film.year || parsedTitle.year,
+            years: yearsList
+          });
 
           allReleases.push({
             id: `torrentkino:${film.slug}:${t.id}`,
@@ -166,9 +230,11 @@ export class TorrentKinoProvider implements TorrentProvider {
             rawTitle,
             title,
             alternativeTitles: film.originalTitle ? [film.originalTitle] : [],
-            year: film.year,
+            year: correlated.year,
+            years: correlated.years,
             contentType: isSeries ? 'series' : 'movie',
-            season,
+            season: correlated.season,
+            seasons: correlated.seasons,
             resolution,
             dynamicRange,
             studios: [],
@@ -179,6 +245,7 @@ export class TorrentKinoProvider implements TorrentProvider {
             leeches: t.peers ?? 0,
             pageUrl: `${BASE_URL}/films/${film.slug}#torrent-${t.id}`,
             torrentUrl: `${BASE_URL}${t.torrentPath}`,
+            magnetUrl: sourceDetails?.magnetUrl,
             relevance: relevanceFor(query, title, alternatives, rawTitle)
           });
         }

@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import type { TorrentResult } from '../../shared/types';
 import {
   cleanAndDeduplicateVoices,
-  detectContentType, extractDynamicRange, extractPart, extractResolution, extractSeason, extractStudios,
+  correlateSeasonAndYear,
+  detectContentType, extractDynamicRange, extractPart, extractResolution, extractSeason, extractSeasons, extractStudios,
   formatBytes, isVideoRelease, parseSizeBytes, parseTopicHtml, relevanceFor, russianLanguageStatus, titleFromRelease
 } from '../lib/metadata';
 import { encodeWin1251, fetchPage, mapConcurrent, ProviderError, type ProviderSearchOptions, type TorrentProvider } from './provider';
@@ -38,9 +39,18 @@ export class NnmClubProvider implements TorrentProvider {
       const sizeLabel = small.eq(sizeIndex).text().trim().split(' ', 3).slice(1).join(' ') || 'Не указано';
       const timestamp = Number(small.eq(sizeIndex + 2).text().trim().split(/\s+/u)[0]);
       const torrentHref = row.find('a[href*="download.php?id="]').first().attr('href');
-      const { title, alternatives, year } = titleFromRelease(rawTitle);
+      const { title, alternatives, year, years } = titleFromRelease(rawTitle);
       const studios = extractStudios(rawTitle, customStudios);
       const sizeBytes = parseSizeBytes(sizeLabel);
+      const contentType = detectContentType(rawTitle);
+      const correlated = correlateSeasonAndYear({
+        contentType,
+        season: extractSeason(rawTitle),
+        seasons: extractSeasons(rawTitle),
+        year,
+        years
+      });
+
       results.push({
         id: `${this.id}:${itemId ?? href}`,
         providerId: this.id,
@@ -49,9 +59,11 @@ export class NnmClubProvider implements TorrentProvider {
         rawTitle,
         title,
         alternativeTitles: alternatives,
-        year,
-        contentType: detectContentType(rawTitle),
-        season: extractSeason(rawTitle),
+        year: correlated.year,
+        years: correlated.years,
+        contentType,
+        season: correlated.season,
+        seasons: correlated.seasons,
         part: extractPart(rawTitle),
         resolution: extractResolution(rawTitle, qualityAliases),
         dynamicRange: extractDynamicRange(rawTitle),

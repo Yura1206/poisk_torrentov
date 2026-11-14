@@ -51,19 +51,54 @@ const STUDIO_PATTERNS: Array<[RegExp, string]> = [
 export const normaliseText = (value: string): string =>
   value.toLocaleLowerCase('ru-RU').replace(/[ё]/g, 'е').replace(/[«»'"`]/g, '').replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
 
-export function titleFromRelease(rawTitle: string): { title: string; alternatives: string[]; year?: number } {
+export function extractYears(rawTitle: string): { year?: number; years?: number[] } {
+  // 1. Year range like (1996-1999) or [1996-1999] or 1996 - 1999
+  const rangeMatch = rawTitle.match(/(?:\(|\[|\s)(19\d{2}|20\d{2})\s*[-–—/]\s*(19\d{2}|20\d{2})(?:\)|\]|\s|,|$)/u);
+  if (rangeMatch) {
+    const start = Number(rangeMatch[1]);
+    const end = Number(rangeMatch[2]);
+    if (start <= end && end - start <= 40) {
+      const years: number[] = [];
+      for (let y = start; y <= end; y++) {
+        years.push(y);
+      }
+      return { year: start, years };
+    }
+  }
+
+  // 2. Comma-separated years like (1996, 1998)
+  const multiMatch = rawTitle.match(/(?:\(|\[)(?:(19\d{2}|20\d{2})(?:,\s*|\s+))+(19\d{2}|20\d{2})(?:\)|\])/u);
+  if (multiMatch) {
+    const allMatches = Array.from(rawTitle.matchAll(/\b(19\d{2}|20\d{2})\b/gu)).map((m) => Number(m[1]));
+    const unique = Array.from(new Set(allMatches));
+    if (unique.length > 0) {
+      return { year: unique[0], years: unique };
+    }
+  }
+
+  // 3. Single year
+  const match = rawTitle.match(/(?:\(|\[|\s)(19\d{2}|20\d{2})(?:\)|\]|\s|,|$)/u);
+  if (match) {
+    const y = Number(match[1]);
+    return { year: y, years: [y] };
+  }
+
+  return {};
+}
+
+export function titleFromRelease(rawTitle: string): { title: string; alternatives: string[]; year?: number; years?: number[] } {
   const withoutSize = rawTitle.replace(/\[[^\]]*(?:GB|MB|TB)[^\]]*\]\s*$/iu, '').trim();
   const cut = withoutSize.search(TECHNICAL_START);
   const candidate = (cut > 0 ? withoutSize.slice(0, cut) : withoutSize)
     .replace(/\s*\[[^\]]*\]\s*$/u, '')
     .replace(/\s*\((?:19|20)\d{2}\)\s*$/u, '')
     .trim();
-  const year = rawTitle.match(/(?:\(|\[|\s)(19\d{2}|20\d{2})(?:\)|\]|\s|,|$)/u)?.[1];
+  const { year, years } = extractYears(rawTitle);
   const alternatives = candidate
     .split(/\s*\/(?![^()]*\))/u)
     .map((part) => part.trim())
     .filter(Boolean);
-  return { title: alternatives[0] || candidate || rawTitle, alternatives: alternatives.slice(1), year: year ? Number(year) : undefined };
+  return { title: alternatives[0] || candidate || rawTitle, alternatives: alternatives.slice(1), year, years };
 }
 
 export function exactTitleMatches(query: string, item: { title: string; alternativeTitles: string[] }): boolean {
@@ -171,17 +206,111 @@ export function extractResolution(
   return 'unknown';
 }
 
+export function extractDnFromMagnet(magnetUrl?: string): string {
+  if (!magnetUrl) return '';
+  const match = magnetUrl.match(/[?&]dn=([^&]+)/i);
+  if (!match || !match[1]) return '';
+  try {
+    return decodeURIComponent(match[1].replace(/\+/g, ' '));
+  } catch {
+    return match[1];
+  }
+}
+
 export function extractDynamicRange(value: string): DynamicRange {
-  if (/dolby\s*vision|\bdv\b/iu.test(value)) return 'dolby-vision';
-  if (/hdr10\+/iu.test(value)) return 'hdr10plus';
-  if (/hdr10(?!\+)/iu.test(value)) return 'hdr10';
-  if (/\bhdr\b/iu.test(value)) return 'hdr';
+  if (!value) return 'sdr';
+  // 1. Dolby Vision (Highest priority - DV releases often also contain HDR10 fallback)
+  if (
+    /dolby[\s\._-]*vision|\bdv\b|\bdovi\b|dvhe|dvh1|dva1|\b(?:p7|p8|profile[\s\._-]*[78])\b|\b(?:mel|fel)\b/iu.test(
+      value
+    )
+  ) {
+    return 'dolby-vision';
+  }
+  // 2. HDR10+ (Dynamic metadata HDR)
+  if (/hdr10[\s\._-]*(?:\+|plus)|hdr[\s\._-]*(?:\+|plus)/iu.test(value)) {
+    return 'hdr10plus';
+  }
+  // 3. HDR10 (Static metadata HDR)
+  if (/hdr10(?!\+|[\s\._-]*plus)|\bhdr-10\b/iu.test(value)) {
+    return 'hdr10';
+  }
+  // 4. HDR / HLG / Wide Color Gamut
+  if (/\b(?:hdr|hlg|bt\.?2020|bt2020|wide[\s\._-]*color[\s\._-]*gamut|wcg)\b/iu.test(value)) {
+    return 'hdr';
+  }
   return 'sdr';
 }
 
+const COUNTRIES_LIST = [
+  'США', 'Россия', 'Франция', 'Великобритания', 'Германия', 'Италия', 'Испания',
+  'Канада', 'Япония', 'Южная Корея', 'Корея', 'Австралия', 'Индия', 'СССР',
+  'Китай', 'Дания', 'Швеция', 'Норвегия', 'Польша', 'Турция', 'Мексика',
+  'Бразилия', 'Ирландия', 'Бельгия', 'Нидерланды', 'Австрия', 'Швейцария',
+  'Финляндия', 'Новая Зеландия', 'Гонконг', 'Тайвань', 'Чехия', 'Венгрия'
+];
+
+const countryPattern = new RegExp(`(?<![\\p{L}\\p{N}])(${COUNTRIES_LIST.join('|')})(?![\\p{L}\\p{N}])`, 'iu');
+
+export function extractCountry(rawTitle?: string): string | undefined {
+  if (!rawTitle) return undefined;
+  const match = rawTitle.match(countryPattern);
+  if (!match) return undefined;
+  const found = match[1];
+  if (found.toUpperCase() === 'США' || found.toUpperCase() === 'СССР') return found.toUpperCase();
+  return found.charAt(0).toUpperCase() + found.slice(1).toLowerCase();
+}
+
+export function correlateSeasonAndYear(item: {
+  contentType: ContentType;
+  season?: number;
+  seasons?: number[];
+  year?: number;
+  years?: number[];
+}): { year?: number; years?: number[]; season?: number; seasons?: number[] } {
+  if (item.contentType !== 'series' && item.contentType !== 'reality') {
+    return { year: item.year, years: item.years, season: item.season, seasons: item.seasons };
+  }
+
+  const seasons = item.seasons?.length ? item.seasons : (item.season !== undefined ? [item.season] : []);
+  const years = item.years?.length ? item.years : (item.year !== undefined ? [item.year] : []);
+
+  if (seasons.length === 1 && seasons[0] > 1 && years.length > 1) {
+    const s = seasons[0];
+    const sYear = s <= years.length ? years[s - 1] : years[years.length - 1];
+    return {
+      year: sYear,
+      years: [sYear],
+      season: s,
+      seasons: [s]
+    };
+  }
+
+  return { year: item.year, years: item.years, season: item.season, seasons: item.seasons };
+}
+
 export function extractSeason(value: string): number | undefined {
+  const rangeMatch = value.match(/(?:сезон(?:ы|а)?|season(?:s)?|\bS)\s*0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\b|0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\s*сезон/iu);
+  if (rangeMatch) {
+    return Number(rangeMatch[1] ?? rangeMatch[3]);
+  }
   const match = value.match(/(?:\bS|сезон\s*|с\.)0?(\d{1,2})\b|(\d{1,2})\s*сезон/iu);
   return match ? Number(match[1] ?? match[2]) : undefined;
+}
+
+export function extractSeasons(value: string): number[] {
+  const rangeMatch = value.match(/(?:сезон(?:ы|а)?|season(?:s)?|\bS)\s*0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\b|0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\s*сезон/iu);
+  if (rangeMatch) {
+    const start = Number(rangeMatch[1] ?? rangeMatch[3]);
+    const end = Number(rangeMatch[2] ?? rangeMatch[4]);
+    if (start >= 1 && end >= start && end - start <= 40) {
+      const res: number[] = [];
+      for (let i = start; i <= end; i++) res.push(i);
+      return res;
+    }
+  }
+  const single = extractSeason(value);
+  return single !== undefined ? [single] : [];
 }
 
 export function extractPart(value: string): number | undefined {

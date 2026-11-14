@@ -12,8 +12,10 @@ export interface TorrentResult {
   title: string;
   alternativeTitles: string[];
   year?: number;
+  years?: number[];
   contentType: Exclude<ContentType, 'all'>;
   season?: number;
+  seasons?: number[];
   part?: number;
   resolution: Resolution;
   dynamicRange: DynamicRange;
@@ -74,13 +76,32 @@ export interface DetectedApp {
   description: string;
 }
 
+export interface GatewayTestResult {
+  worker: { ok: boolean; status?: number; error?: string };
+  backup: { ok: boolean; status?: number; error?: string };
+}
+
+export interface FilmRatings {
+  kp?: string;
+  kpVotes?: string;
+  kpReviewsUrl?: string;
+  imdb?: string;
+  imdbVotes?: string;
+  imdbReviewsUrl?: string;
+  country?: string;
+}
+
 export interface AppSettings {
   showUnconfirmedLanguage: boolean;
+  bypassBlocking?: boolean;
+  cloudflareWorkerUrl?: string;
+  backupWorkerUrl?: string;
   providers: Array<Pick<ProviderState, 'id' | 'name' | 'enabled'> & { note?: string; requiresAuth?: boolean; authorized?: boolean }>;
   customStudios: string[];
   qualityAliases: Array<{ term: string; resolution: Exclude<Resolution, 'unknown'> }>;
   rutrackerAuth?: RuTrackerAuth;
   magnetAction?: string;
+  quickPlayerApp?: string;
 }
 
 export interface FilterState {
@@ -140,6 +161,10 @@ export interface RendererApi {
   getDetectedApps: () => Promise<DetectedApp[]>;
   openMagnetWith: (magnetUrl: string, appId: string, title?: string, saveAsDefault?: boolean) => Promise<{ ok: boolean; error?: string }>;
   resolvePoster: (title: string, year?: number, pageUrl?: string, contentType?: string) => Promise<string | null>;
+  resolveRatings?: (title: string, year?: number) => Promise<FilmRatings | null>;
+  testGateways?: (workerUrl?: string, backupUrl?: string) => Promise<GatewayTestResult>;
+  transcribeAudio?: (audioData: number[]) => Promise<{ ok: boolean; text?: string; error?: string }>;
+  correctQuery?: (query: string) => Promise<string>;
 }
 
 declare global {

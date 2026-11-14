@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import iconv from 'iconv-lite';
-import { encodeWin1251, ProviderError } from './provider';
+import { encodeWin1251, ProviderError, setGatewayConfig } from './provider';
 import { MegapeerProvider } from './megapeer';
 import { NnmClubProvider } from './nnmclub';
 import { RutrackerProvider } from './rutracker';
@@ -250,6 +250,42 @@ describe('TorrentKinoProvider', () => {
       expect(results[0].leeches).toBe(34);
       expect(results[0].pageUrl).toBe('https://torrentkino.org/films/matritsa-1999#torrent-19623416');
       expect(results[0].torrentUrl).toBe('https://torrentkino.org/api/torrents/19623416?t=123');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});
+
+describe('Gateway bypass policy', () => {
+  it('при включенном обходе блокировок запросы к заблокированным трекерам идут строго через шлюз и не обращаются напрямую', async () => {
+    setGatewayConfig({
+      bypassBlocking: true,
+      cloudflareWorkerUrl: 'https://torrfilm-proxy.yuroc1206.workers.dev',
+      backupWorkerUrl: 'https://acqjmtapqiscohnnejvq.supabase.co/functions/v1/torrfilmproxy'
+    });
+    const originalFetch = global.fetch;
+    const requestedUrls: string[] = [];
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      requestedUrls.push(url);
+      return Promise.reject(new Error('Gateway down'));
+    }) as never;
+
+    try {
+      const provider = new MegapeerProvider();
+      await expect(
+        provider.search({
+          query: 'Матрица',
+          page: 0,
+          signal: new AbortController().signal,
+          customStudios: [],
+          qualityAliases: []
+        })
+      ).rejects.toThrow();
+
+      // All attempts must be made to gateway URLs, zero direct calls to megapeer.vip
+      expect(requestedUrls.length).toBeGreaterThan(0);
+      expect(requestedUrls.every((u) => u.includes('workers.dev') || u.includes('supabase.co'))).toBe(true);
+      expect(requestedUrls.some((u) => u.startsWith('https://megapeer.vip'))).toBe(false);
     } finally {
       global.fetch = originalFetch;
     }

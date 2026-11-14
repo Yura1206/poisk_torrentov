@@ -27,6 +27,14 @@ const api: RendererApi = {
     ipcRenderer.invoke('magnet:openWith', magnetUrl, appId, title, saveAsDefault),
   resolvePoster: (title: string, year?: number, pageUrl?: string, contentType?: string) =>
     ipcRenderer.invoke('poster:resolve', title, year, pageUrl, contentType),
+  resolveRatings: (title: string, year?: number) =>
+    ipcRenderer.invoke('ratings:resolve', title, year),
+  testGateways: (workerUrl?: string, backupUrl?: string) =>
+    ipcRenderer.invoke('gateways:test', workerUrl, backupUrl),
+  transcribeAudio: (audioData: number[]) =>
+    ipcRenderer.invoke('audio:transcribe', audioData),
+  correctQuery: (query: string) =>
+    ipcRenderer.invoke('query:correct', query),
   onSearchStream: (callback) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: import('../shared/types').SearchStreamPayload) => callback(payload);
     ipcRenderer.on('search:stream', handler);

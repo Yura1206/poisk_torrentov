@@ -1,4 +1,5 @@
 import { APP_USER_AGENT } from '../providers/provider';
+import { FilmRatings } from '../../shared/types';
 
 function cleanTitleForSearch(title: string): string {
   return title
@@ -42,10 +43,155 @@ export function titlesMatch(target: string, candidate: string, candidateOriginal
 
 export class PosterService {
   private cache = new Map<string, string | null>();
+  private catalogCache = new Map<string, string | null>();
+  private catalogPromises = new Map<string, Promise<string | null>>();
+  private posterPromises = new Map<string, Promise<string | null>>();
+  private ratingsCache = new Map<string, FilmRatings | null>();
+  private ratingsPromises = new Map<string, Promise<FilmRatings | null>>();
   private ruTrackerPageLoader?: (url: string, signal?: AbortSignal) => Promise<string>;
 
   setRuTrackerPageLoader(loader: (url: string, signal?: AbortSignal) => Promise<string>): void {
     this.ruTrackerPageLoader = loader;
+  }
+
+  async resolveRatings(title: string, year?: number): Promise<FilmRatings | null> {
+    const cleanTitle = cleanTitleForSearch(title);
+    if (!cleanTitle) return null;
+
+    const cacheKey = `${cleanTitle.toLowerCase()}:${year ?? ''}`;
+    if (this.ratingsCache.has(cacheKey)) {
+      return this.ratingsCache.get(cacheKey) ?? null;
+    }
+    if (this.ratingsPromises.has(cacheKey)) {
+      return this.ratingsPromises.get(cacheKey)!;
+    }
+
+    const promise = this.fetchRatingsInternal(cleanTitle, year, cacheKey);
+    this.ratingsPromises.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async fetchRatingsInternal(cleanTitle: string, year: number | undefined, cacheKey: string): Promise<FilmRatings | null> {
+    try {
+      const searchUrl = `https://torrentkino.org/api/search?q=${encodeURIComponent(cleanTitle)}`;
+      const res = await fetch(searchUrl, {
+        headers: { 'User-Agent': APP_USER_AGENT },
+        signal: AbortSignal.timeout(3500)
+      });
+      if (!res.ok) {
+        this.ratingsCache.set(cacheKey, null);
+        return null;
+      }
+      const data = (await res.json()) as {
+        results?: Array<{
+          kinopoiskId?: string | number;
+          slug?: string;
+          title?: string;
+          originalTitle?: string;
+          year?: number;
+        }>;
+      };
+      if (!Array.isArray(data.results) || data.results.length === 0) {
+        this.ratingsCache.set(cacheKey, null);
+        return null;
+      }
+
+      let match = data.results.find((item) => {
+        if (!item.title) return false;
+        const m = titlesMatch(cleanTitle, item.title, item.originalTitle);
+        if (!m) return false;
+        if (year && item.year && Math.abs(item.year - year) > 1) return false;
+        return true;
+      });
+      if (!match) {
+        match = data.results.find((item) => item.title && titlesMatch(cleanTitle, item.title, item.originalTitle));
+      }
+
+      const kinopoiskId = match?.kinopoiskId;
+      if (!kinopoiskId) {
+        this.ratingsCache.set(cacheKey, null);
+        return null;
+      }
+
+      return await this.fetchRatingsByKpId(kinopoiskId, cacheKey, match?.slug);
+    } catch {
+      this.ratingsCache.set(cacheKey, null);
+      return null;
+    }
+  }
+
+  async fetchRatingsByKpId(kinopoiskId: string | number, cacheKey: string, slug?: string): Promise<FilmRatings | null> {
+    if (this.ratingsCache.has(cacheKey)) {
+      return this.ratingsCache.get(cacheKey) ?? null;
+    }
+    try {
+      const xmlPromise = fetch(`https://rating.kinopoisk.ru/${kinopoiskId}.xml`, {
+        signal: AbortSignal.timeout(3000)
+      });
+      let pageDataPromise: Promise<{ country?: string; imdbId?: string }> = Promise.resolve({});
+      if (slug) {
+        pageDataPromise = fetch(`https://torrentkino.org/films/${slug}`, {
+          headers: { 'User-Agent': APP_USER_AGENT },
+          signal: AbortSignal.timeout(3000)
+        }).then((r) => (r.ok ? r.text() : ''))
+          .then((t) => {
+            const m = t.match(/countryOfOrigin":\["([^"]+)"/);
+            const imdbM = t.match(/tt\d{7,8}/);
+            return {
+              country: m ? m[1] : undefined,
+              imdbId: imdbM ? imdbM[0] : undefined
+            };
+          })
+          .catch(() => ({}));
+      }
+
+      const [xmlRes, pageData] = await Promise.all([xmlPromise, pageDataPromise]);
+      if (!xmlRes.ok) {
+        this.ratingsCache.set(cacheKey, null);
+        return null;
+      }
+      const xmlText = await xmlRes.text();
+      const kpMatch = xmlText.match(/<kp_rating(?:\s+num_vote=['"]([^'"]*)['"])?>([\d\.]+)<\/kp_rating>/);
+      const imdbMatch = xmlText.match(/<imdb_rating(?:\s+num_vote=['"]([^'"]*)['"])?>([\d\.]+)<\/imdb_rating>/);
+
+      const formatVotes = (str?: string) => {
+        if (!str) return undefined;
+        const n = parseInt(str, 10);
+        if (isNaN(n) || n === 0) return undefined;
+        if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+        if (n >= 1000) return `${Math.round(n / 1000)}K`;
+        return String(n);
+      };
+
+      const kpRaw = kpMatch?.[2];
+      const imdbRaw = imdbMatch?.[2];
+      const kpNum = kpRaw ? parseFloat(kpRaw) : 0;
+      const imdbNum = imdbRaw ? parseFloat(imdbRaw) : 0;
+
+      const kpReviewsUrl = kinopoiskId ? `https://www.kinopoisk.ru/film/${kinopoiskId}/reviews/` : undefined;
+      const imdbReviewsUrl = pageData.imdbId ? `https://www.imdb.com/title/${pageData.imdbId}/reviews/` : undefined;
+
+      const ratings: FilmRatings = {
+        kp: kpNum > 0 ? kpNum.toFixed(1) : undefined,
+        kpVotes: formatVotes(kpMatch?.[1]),
+        kpReviewsUrl,
+        imdb: imdbNum > 0 ? imdbNum.toFixed(1) : undefined,
+        imdbVotes: formatVotes(imdbMatch?.[1]),
+        imdbReviewsUrl,
+        country: pageData.country
+      };
+
+      if (!ratings.kp && !ratings.imdb && !ratings.country) {
+        this.ratingsCache.set(cacheKey, null);
+        return null;
+      }
+
+      this.ratingsCache.set(cacheKey, ratings);
+      return ratings;
+    } catch {
+      this.ratingsCache.set(cacheKey, null);
+      return null;
+    }
   }
 
   async resolvePoster(title: string, year?: number, pageUrl?: string, contentType?: string): Promise<string | null> {
@@ -56,45 +202,86 @@ export class PosterService {
     if (this.cache.has(cacheKey)) {
       return this.cache.get(cacheKey) ?? null;
     }
+    if (this.posterPromises.has(cacheKey)) {
+      return this.posterPromises.get(cacheKey)!;
+    }
 
-    // 1. First priority: fast catalog search by title & year & contentType (instant 50-80ms CDN poster)
-    if (cleanTitle) {
-      try {
-        const catalogPoster = await this.searchCatalog(cleanTitle, year, contentType);
+    const promise = this.resolvePosterInternal(cleanTitle, year, pageUrl, contentType, cacheKey);
+    this.posterPromises.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async resolvePosterInternal(
+    cleanTitle: string,
+    year: number | undefined,
+    pageUrl: string | undefined,
+    contentType: string | undefined,
+    cacheKey: string
+  ): Promise<string | null> {
+    try {
+      // 1. First priority: fast catalog search by title & year & contentType (instant 50-80ms CDN poster)
+      if (cleanTitle) {
+        const catalogPoster = await this.getOrSearchCatalog(cleanTitle, year, contentType);
         if (catalogPoster) {
           this.cache.set(cacheKey, catalogPoster);
           return catalogPoster;
         }
-      } catch {
-        // Fall back to release page
       }
-    }
 
-    // 2. Fast path for TorrentKino if not found in search: direct slug from pageUrl
-    if (pageUrl && pageUrl.includes('torrentkino.org')) {
-      const slugMatch = pageUrl.match(/\/films\/([^#?\/]+)/);
-      if (slugMatch) {
-        const url = `https://torrentkino.org/images/posters/${slugMatch[1]}.webp`;
-        this.cache.set(cacheKey, url);
-        return url;
-      }
-    }
-
-    // 3. Fallback: extract poster directly from the torrent release page (for TV shows, rare items)
-    if (pageUrl && pageUrl.startsWith('http')) {
-      try {
-        const pagePoster = await this.extractPosterFromPage(pageUrl);
-        if (pagePoster) {
-          this.cache.set(cacheKey, pagePoster);
-          return pagePoster;
+      // 2. Fast path for TorrentKino if not found in search: direct slug from pageUrl
+      if (pageUrl && pageUrl.includes('torrentkino.org')) {
+        const slugMatch = pageUrl.match(/\/films\/([^#?\/]+)/);
+        if (slugMatch) {
+          const url = `https://torrentkino.org/images/posters/${slugMatch[1]}.webp`;
+          this.cache.set(cacheKey, url);
+          return url;
         }
-      } catch {
-        // Ignore
       }
+
+      // 3. Fallback: extract poster directly from the torrent release page (for TV shows, rare items)
+      if (pageUrl && pageUrl.startsWith('http')) {
+        try {
+          const pagePoster = await this.extractPosterFromPage(pageUrl);
+          if (pagePoster) {
+            this.cache.set(cacheKey, pagePoster);
+            return pagePoster;
+          }
+        } catch {
+          // Ignore
+        }
+      }
+
+      this.cache.set(cacheKey, null);
+      return null;
+    } finally {
+      this.posterPromises.delete(cacheKey);
+    }
+  }
+
+  private async getOrSearchCatalog(cleanTitle: string, year?: number, contentType?: string): Promise<string | null> {
+    const catalogKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
+    if (this.catalogCache.has(catalogKey)) {
+      return this.catalogCache.get(catalogKey) ?? null;
+    }
+    if (this.catalogPromises.has(catalogKey)) {
+      return this.catalogPromises.get(catalogKey)!;
     }
 
-    this.cache.set(cacheKey, null);
-    return null;
+    const promise = (async () => {
+      try {
+        const result = await this.searchCatalog(cleanTitle, year, contentType);
+        this.catalogCache.set(catalogKey, result);
+        return result;
+      } catch {
+        this.catalogCache.set(catalogKey, null);
+        return null;
+      } finally {
+        this.catalogPromises.delete(catalogKey);
+      }
+    })();
+
+    this.catalogPromises.set(catalogKey, promise);
+    return promise;
   }
 
   private async extractPosterFromPage(pageUrl: string): Promise<string | null> {
@@ -135,6 +322,12 @@ export class PosterService {
 
   private extractPosterFromHtml(html: string, pageUrl: string): string | null {
     if (!html) return null;
+
+    // 1. Check for Kinopoisk link in the release HTML (RuTracker, RuTor, NNMClub, MegaPeer)
+    const kpMatch = html.match(/(?:kinopoisk\.ru\/(?:film|series|level\/1\/film)|rating\.kinopoisk\.ru)\/(\d+)/i);
+    if (kpMatch && kpMatch[1] && kpMatch[1].length >= 4) {
+      return `https://st.kp.yandex.net/images/film_iphone/iphone360_${kpMatch[1]}.jpg`;
+    }
 
     // TorrentKino: images/posters
     if (pageUrl.includes('torrentkino')) {
@@ -250,6 +443,8 @@ export class PosterService {
 
     const data = (await res.json()) as {
       results?: Array<{
+        kinopoiskId?: string | number;
+        slug?: string;
         title?: string;
         originalTitle?: string;
         posterUrl?: string;
@@ -329,10 +524,19 @@ export class PosterService {
     scored.sort((a, b) => b.score - a.score);
 
     const best = scored[0];
-    if (best && best.score > 0 && best.item.posterUrl) {
-      return best.item.posterUrl.startsWith('http')
-        ? best.item.posterUrl
-        : `https://torrentkino.org${best.item.posterUrl}`;
+    if (best && best.score > 0) {
+      if (best.item.kinopoiskId) {
+        const ratingsKey = `${cleanTitle.toLowerCase()}:${year ?? ''}`;
+        void this.fetchRatingsByKpId(best.item.kinopoiskId, ratingsKey, best.item.slug);
+      }
+      if (best.item.posterUrl) {
+        return best.item.posterUrl.startsWith('http')
+          ? best.item.posterUrl
+          : `https://torrentkino.org${best.item.posterUrl}`;
+      }
+      if (best.item.kinopoiskId) {
+        return `https://st.kp.yandex.net/images/film_iphone/iphone360_${best.item.kinopoiskId}.jpg`;
+      }
     }
 
     return null;

@@ -90,6 +90,19 @@ describe('PosterService extraction', () => {
     expect(extracted).toBeNull();
   });
 
+  it('extracts Kinopoisk poster from html containing kinopoisk.ru link', async () => {
+    const service = new PosterService();
+    const html = `
+      <div class="post_body">
+        <a href="https://www.kinopoisk.ru/film/258687/">Кинопоиск</a>
+        <img src="https://example.com/poster.jpg" />
+      </div>
+    `;
+    // @ts-expect-error accessing private method for unit test
+    const extracted = service.extractPosterFromHtml(html, 'https://rutracker.org/forum/viewtopic.php?t=123');
+    expect(extracted).toBe('https://st.kp.yandex.net/images/film_iphone/iphone360_258687.jpg');
+  });
+
   it('uses ruTrackerPageLoader when resolving RuTracker pageUrl', async () => {
     const service = new PosterService();
     service.setRuTrackerPageLoader(async (_url) => {

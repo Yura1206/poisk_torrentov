@@ -14,11 +14,13 @@
     "build:renderer": "vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "build": "npm run typecheck && npm run test && npm run build:renderer && npm run build:main",
-    "dist": "powershell -Command \"Stop-Process -Name 'Поисковик*' -Force -ErrorAction SilentlyContinue\" && npm run build && electron-builder --win portable && powershell -Command \"Remove-Item -Path 'release/win-unpacked' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -Path 'release/builder-debug.yml' -Force -ErrorAction SilentlyContinue\"",
+    "dist": "powershell -Command \"Stop-Process -Name 'Поисковик*' -Force -ErrorAction SilentlyContinue\" && npm run build && electron-builder --win portable && node scripts/organize_dist.js",
+    "dist:dir": "powershell -Command \"Stop-Process -Name 'Поисковик*' -Force -ErrorAction SilentlyContinue\" && npm run build && electron-builder --win dir && node scripts/organize_dist.js",
     "dist:portable": "npm run dist",
     "start": "electron ."
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "cheerio": "^1.1.2",
     "iconv-lite": "^0.7.0"
   },
@@ -41,8 +43,11 @@
   "build": {
     "appId": "ru.torrentnavigator.app",
     "productName": "Поисковик торрентов",
-    "compression": "normal",
-    "electronLanguages": ["ru", "en-US"],
+    "compression": "maximum",
+    "electronLanguages": [
+      "ru",
+      "en-US"
+    ],
     "directories": {
       "output": "release"
     },
@@ -51,12 +56,28 @@
       "!dist/**/*.map",
       "!dist/**/*.test.*",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "!**/node_modules/onnxruntime-node/bin/napi-v3/darwin/**",
+      "!**/node_modules/onnxruntime-node/bin/napi-v3/linux/**",
+      "!**/node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**",
+      "!**/node_modules/onnxruntime-node/bin/napi-v3/win32/ia32/**",
+      "!**/node_modules/onnxruntime-web/dist/*.wasm",
+      "!**/node_modules/onnxruntime-web/dist/*.map",
+      "!**/node_modules/@xenova/transformers/.cache/**",
+      "!**/node_modules/@xenova/transformers/dist/*.wasm",
+      "!**/node_modules/@xenova/transformers/dist/*.map"
     ],
     "asar": true,
+    "asarUnpack": [
+      "**/node_modules/onnxruntime-node/**",
+      "**/node_modules/onnxruntime-web/**",
+      "**/node_modules/@xenova/transformers/**"
+    ],
     "win": {
       "icon": "build/icon.ico",
-      "target": ["portable"],
+      "target": [
+        "portable"
+      ],
       "artifactName": "Поисковик торрентов.${ext}"
     },
     "portable": {
