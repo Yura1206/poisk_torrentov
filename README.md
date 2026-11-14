@@ -1,4 +1,4 @@
-# <img src="assets/icon.png" width="28" height="28" alt="Поисковик торрентов" /> Поисковик торрентов
+# <img src="assets/icon.png" width="38" height="38" alt="Поисковик торрентов" /> Поисковик торрентов
 
 [![Версия](https://img.shields.io/badge/Версия-v1.0.0-blue.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
 [![Платформа](https://img.shields.io/badge/Платформа-Windows%2010%20%7C%2011%20(64--bit)-0078D6.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
