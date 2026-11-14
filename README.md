@@ -2,7 +2,7 @@
 
 [![Версия](https://img.shields.io/badge/Версия-v1.0.0-blue.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
 [![Платформа](https://img.shields.io/badge/Платформа-Windows%2010%20%7C%2011%20(64--bit)-0078D6.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
-[![VirusTotal](https://img.shields.io/badge/VirusTotal-Безопасно%20(0%20угроз)-brightgreen.svg)](https://www.virustotal.com/gui/file/f300abb458703ba88bba174762a1d50637251f8abf7764a63940981982a00cc2)
+[![VirusTotal](https://img.shields.io/badge/VirusTotal-Безопасно%20(0%20угроз)-brightgreen.svg)](https://www.virustotal.com/gui/file/731695ac38293fd3b2473f7b4c460fba885ce8a80230ef67aad7a5fc4d03cddf)
 [![Лицензия](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](LICENSE)
 
 **Поисковик торрентов** — современное, быстрое и удобное настольное приложение для Windows, объединяющее поиск фильмов, сериалов и телешоу по крупнейшим русскоязычным каталогам (RuTracker, RuTor, NNM-Club, MegaPeer, TorrentKino) в едином интерфейсе.
@@ -26,7 +26,7 @@
 
 ### 🛡️ Безопасность и проверка VirusTotal
 Файлы проверены сервисом VirusTotal более чем 70 антивирусными базами — угроз и вредоносного кода не обнаружено (0 срабатываний):  
-👉 **[Открыть полный отчёт проверки на VirusTotal](https://www.virustotal.com/gui/file/f300abb458703ba88bba174762a1d50637251f8abf7764a63940981982a00cc2)**
+👉 **[Открыть полный отчёт проверки на VirusTotal](https://www.virustotal.com/gui/file/731695ac38293fd3b2473f7b4c460fba885ce8a80230ef67aad7a5fc4d03cddf)**
 
 > 💡 **Первый запуск в Windows (SmartScreen):**  
 > Поскольку программа является независимым бесплатным проектом без платной цифровой подписи корпорации Microsoft, фильтр **SmartScreen** при первом запуске может показать предупреждение.  
