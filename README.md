@@ -1,9 +1,15 @@
-# <img src="assets/icon.png" width="38" height="38" alt="Поисковик торрентов" /> Поисковик торрентов
+<div align="center">
 
-[![Версия](https://img.shields.io/badge/Версия-v1.0.0-blue.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
-[![Платформа](https://img.shields.io/badge/Платформа-Windows%2010%20%7C%2011%20(64--bit)-0078D6.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
-[![VirusTotal](https://img.shields.io/badge/VirusTotal-Безопасно%20(0%20угроз)-brightgreen.svg)](https://www.virustotal.com/gui/file/f300abb458703ba88bba174762a1d50637251f8abf7764a63940981982a00cc2)
-[![Лицензия](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](LICENSE)
+  <img src="assets/icon.png" width="80" height="80" alt="Поисковик торрентов" />
+
+  # Поисковик торрентов
+
+  [![Версия](https://img.shields.io/badge/Версия-v1.0.0-blue.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
+  [![Платформа](https://img.shields.io/badge/Платформа-Windows%2010%20%7C%2011%20(64--bit)-0078D6.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
+  [![VirusTotal](https://img.shields.io/badge/VirusTotal-Безопасно%20(0%20угроз)-brightgreen.svg)](https://www.virustotal.com/gui/file/f300abb458703ba88bba174762a1d50637251f8abf7764a63940981982a00cc2)
+  [![Лицензия](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](LICENSE)
+
+</div>
 
 **Поисковик торрентов** — современное, быстрое и удобное настольное приложение для Windows, объединяющее поиск фильмов, сериалов и телешоу по крупнейшим русскоязычным каталогам (RuTracker, RuTor, NNM-Club, MegaPeer, TorrentKino) в едином интерфейсе.
 
