@@ -2,6 +2,23 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require(path.resolve('node_modules/sharp'));
 
+// Circle center is (218, 218), r=96, stroke-width=28.
+// Inner radius of the rim (the glass edge) = 96 - 14 = 82 px.
+// Outer radius of the rim (the outer edge) = 96 + 14 = 110 px.
+//
+// Angle is 45 deg: cos(45)=sin(45)=0.7071.
+// At center (218, 218):
+// Inner glass boundary in direction of handle: 218 + 82 * 0.7071 = 276.0.
+// Outer rim boundary in direction of handle: 218 + 110 * 0.7071 = 295.8.
+//
+// Handle stroke-width is 32, with round linecap (radius 16).
+// If handle starts at x1 = 304, y1 = 304:
+// Distance from center = sqrt((304-218)^2 + (304-218)^2) = 121.6 px.
+// Tip of the round cap reaches 121.6 - 16 = 105.6 px from center.
+// Since 105.6 px is strictly LESS than 110 (outer rim) and strictly GREATER than 82 (inner glass),
+// the handle merges seamlessly into the solid rim and does NOT penetrate into the glass!
+// Also, drawing the circle AFTER the line ensures a crisp outer rim contour.
+
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -17,8 +34,8 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width
     </linearGradient>
 
     <linearGradient id="lensFill" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.2" />
-      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.08" />
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.16" />
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.06" />
     </linearGradient>
 
     <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -31,10 +48,10 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width
   <rect x="32" y="32" width="448" height="448" rx="104" fill="url(#bgGrad)" stroke="url(#borderGrad)" stroke-width="4" />
 
   <!-- Flat Minimalist Magnifying Glass -->
-  <!-- Handle -->
-  <line x1="285" y1="285" x2="395" y2="395" stroke="url(#rimGrad)" stroke-width="32" stroke-linecap="round" />
+  <!-- Handle: starts at (304, 304) so it anchors cleanly into the rim without encroaching on the lens -->
+  <line x1="304" y1="304" x2="400" y2="400" stroke="url(#rimGrad)" stroke-width="32" stroke-linecap="round" />
 
-  <!-- Outer Ring (Lens Rim) -->
+  <!-- Outer Ring (Lens Rim) drawn on top of the handle anchor -->
   <circle cx="218" cy="218" r="96" fill="url(#lensFill)" stroke="url(#rimGrad)" stroke-width="28" />
 
   <!-- Inner Flat Video / Search Spark (Play Triangle) -->
