@@ -661,8 +661,9 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   border: 1px solid #1e293b;
   border-radius: 12px;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 16px;
   transition: border-color .15s ease;
 }
 .tv-rating-card.kp {
@@ -671,28 +672,27 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .tv-rating-card.imdb {
   border-left: 3px solid #f5c518;
 }
-.tv-rating-header {
+.tv-rating-col-left {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   justify-content: space-between;
-  height: 20px;
-}
-.tv-rating-header-right {
-  display: flex;
-  align-items: center;
   gap: 6px;
+  min-width: 0;
 }
-.tv-rating-dot {
-  color: #475569;
-  font-size: 13px;
-  line-height: 1;
+.tv-rating-col-right {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 6px;
+  flex-shrink: 0;
 }
 .tv-rating-logo {
   font-size: 12px;
   font-weight: 800;
   letter-spacing: .06em;
   text-transform: uppercase;
-  line-height: 1;
+  line-height: 18px;
 }
 .tv-rating-logo.kp {
   color: #ff6600;
@@ -704,34 +704,32 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   font-size: 11.5px;
   color: #64748b;
   font-weight: 500;
-  line-height: 1;
-}
-.tv-rating-score-row {
-  display: flex;
-  align-items: center;
-  height: 32px;
+  line-height: 18px;
+  white-space: nowrap;
 }
 .tv-rating-score-left {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 32px;
 }
 .tv-rating-reviews-link {
   background: none;
   border: 0;
   padding: 0;
   margin: 0;
-  font-size: 11.5px;
+  font-size: 13.5px;
   font-weight: 600;
   color: #60a5fa;
   text-decoration: underline;
-  text-underline-offset: 2.5px;
+  text-underline-offset: 3px;
   cursor: pointer;
   border-radius: 4px;
   transition: all .15s ease;
-  line-height: 1;
+  height: 32px;
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
 }
 .tv-rating-reviews-link:hover {
   color: #93c5fd;

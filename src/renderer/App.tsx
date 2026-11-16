@@ -1843,26 +1843,8 @@ function TorrentDetailModal({
 
           <div className="tv-ratings-box">
             <div className="tv-rating-card kp">
-              <div className="tv-rating-header">
+              <div className="tv-rating-col-left">
                 <span className="tv-rating-logo kp">КИНОПОИСК</span>
-                <div className="tv-rating-header-right">
-                  {ratings?.kpVotes && <span className="tv-rating-votes">{ratings.kpVotes} оценок</span>}
-                  {ratings?.kpVotes && <span className="tv-rating-dot">·</span>}
-                  <button
-                    type="button"
-                    className="tv-rating-reviews-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const url = ratings?.kpReviewsUrl || `https://www.kinopoisk.ru/index.php?kp_query=${encodeURIComponent(item.title)}`;
-                      void window.torrentApi.openExternal(url);
-                    }}
-                    title="Открыть отзывы на Кинопоиске в браузере"
-                  >
-                    Отзывы
-                  </button>
-                </div>
-              </div>
-              <div className="tv-rating-score-row">
                 <div className="tv-rating-score-left">
                   {ratings?.kpNotFormed ? null : <span className="tv-rating-star kp">★</span>}
                   <span
@@ -1873,35 +1855,47 @@ function TorrentDetailModal({
                   </span>
                 </div>
               </div>
+              <div className="tv-rating-col-right">
+                <span className="tv-rating-votes">{ratings?.kpVotes ? `${ratings.kpVotes} оценок` : ''}</span>
+                <button
+                  type="button"
+                  className="tv-rating-reviews-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const url = ratings?.kpReviewsUrl || `https://www.kinopoisk.ru/index.php?kp_query=${encodeURIComponent(item.title)}`;
+                    void window.torrentApi.openExternal(url);
+                  }}
+                  title="Открыть отзывы на Кинопоиске в браузере"
+                >
+                  Отзывы
+                </button>
+              </div>
             </div>
 
             <div className="tv-rating-card imdb">
-              <div className="tv-rating-header">
+              <div className="tv-rating-col-left">
                 <span className="tv-rating-logo imdb">IMDb</span>
-                <div className="tv-rating-header-right">
-                  {ratings?.imdbVotes && <span className="tv-rating-votes">{ratings.imdbVotes} оценок</span>}
-                  {ratings?.imdbVotes && <span className="tv-rating-dot">·</span>}
-                  <button
-                    type="button"
-                    className="tv-rating-reviews-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const url = ratings?.imdbReviewsUrl || `https://www.imdb.com/find/?q=${encodeURIComponent(item.title)}&s=tt`;
-                      void window.torrentApi.openExternal(url);
-                    }}
-                    title="Открыть отзывы на IMDb в браузере"
-                  >
-                    Отзывы
-                  </button>
-                </div>
-              </div>
-              <div className="tv-rating-score-row">
                 <div className="tv-rating-score-left">
                   <span className="tv-rating-star imdb">★</span>
                   <span className={`tv-rating-num ${parseFloat(ratings?.imdb || '0') >= 7 ? 'good' : ''}`}>
                     {ratingsLoading ? '…' : (ratings?.imdb || '—')}
                   </span>
                 </div>
+              </div>
+              <div className="tv-rating-col-right">
+                <span className="tv-rating-votes">{ratings?.imdbVotes ? `${ratings.imdbVotes} оценок` : ''}</span>
+                <button
+                  type="button"
+                  className="tv-rating-reviews-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const url = ratings?.imdbReviewsUrl || `https://www.imdb.com/find/?q=${encodeURIComponent(item.title)}&s=tt`;
+                    void window.torrentApi.openExternal(url);
+                  }}
+                  title="Открыть отзывы на IMDb в браузере"
+                >
+                  Отзывы
+                </button>
               </div>
             </div>
           </div>
