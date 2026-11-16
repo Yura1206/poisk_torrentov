@@ -502,8 +502,8 @@ export class PosterService {
 
       const rawImg = match?.i?.imageUrl;
       if (rawImg) {
-        // Optimize Amazon image size for UI card: request standard 380x562 thumbnail
-        return rawImg.replace(/(\._V1_).*(\.jpg)$/, '$1_QL75_UX380_CR0,0,380,562_$2');
+        // Optimize Amazon image size for UI card: request standard 380px width without white canvas padding
+        return rawImg.replace(/(\._V1_).*(\.jpg)$/, '$1_QL75_UX380_$2');
       }
       return null;
     } catch {
