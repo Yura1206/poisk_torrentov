@@ -82,6 +82,25 @@ function formatReleaseSubline(
   return text;
 }
 
+function hasActualCorrection(original: string, candidate: string): boolean {
+  const normOriginal = original.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
+  const normCandidate = candidate.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
+  if (!normOriginal || !normCandidate) return false;
+  if (normOriginal === normCandidate) return false;
+
+  const origWords = normOriginal.split(/\s+/).filter(Boolean);
+  const candWords = normCandidate.split(/\s+/).filter(Boolean);
+
+  // If candidate is just the original words plus extra words (e.g. season, year, episode),
+  // then NO typo was fixed! Never show this as an autocorrection!
+  const allOriginalWordsInCandidate = origWords.every((ow) => candWords.includes(ow));
+  if (allOriginalWordsInCandidate) {
+    return false;
+  }
+
+  return true;
+}
+
 export default function App() {
   const [query, setQuery] = useState('');
   const [exact, setExact] = useState(false);
@@ -204,7 +223,7 @@ export default function App() {
     }
     let active = true;
     void window.torrentApi.correctQuery?.(query).then((corrected) => {
-      if (active && corrected && corrected.toLowerCase() !== query.toLowerCase().trim()) {
+      if (active && corrected && hasActualCorrection(query, corrected)) {
         setDidYouMean(corrected);
       }
     });
@@ -230,7 +249,7 @@ export default function App() {
           setTypingSuggestion(null);
           return;
         }
-        if (corrected.toLowerCase() !== trimmed.toLowerCase()) {
+        if (hasActualCorrection(trimmed, corrected)) {
           setTypingSuggestion(corrected);
         } else {
           setTypingSuggestion(null);
@@ -1459,7 +1478,7 @@ function SeasonDropdown({
         aria-expanded={open}
         title="Выбрать сезон из выпадающего списка"
       >
-        <span>{activeSeason ? `S${activeSeason}` : 'Все'}</span>
+        <span>{activeSeason ? `Сезон ${activeSeason}` : 'Все'}</span>
         <span className="dropdown-arrow">{open ? '▲' : '▼'}</span>
       </button>
 
@@ -1485,7 +1504,7 @@ function SeasonDropdown({
                 setOpen(false);
               }}
             >
-              Сезон {s} (S{s})
+              Сезон {s}
             </button>
           ))}
         </div>
@@ -1514,7 +1533,7 @@ function ActiveFilters({
     ['dynamicRanges', filters.dynamicRanges.map((range) => rangeLabels[range]).join(', ')],
     ['providers', (filters.providers ?? []).map((p) => providerLabels[p] || p).join(', ')],
     ['years', (filters.years ?? []).map((y) => String(y)).join(', ')],
-    ['seasons', filters.seasons.map((season) => `S${season}`).join(', ')],
+    ['seasons', filters.seasons.map((season) => `Сезон ${season}`).join(', ')],
     ['parts', filters.parts.map((part) => `Часть ${part}`).join(', ')]
   ].filter(([, label]) => label) as Array<[keyof FilterState, string]>;
   if (!current.length) return null;

@@ -1055,6 +1055,8 @@ body.modal-open { overflow: hidden !important; }
   color: #cbd5e1;
   font-size: 13.5px;
   cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
   transition: background 0.12s ease, color 0.12s ease;
 }
 .year-dropdown-item:hover {
