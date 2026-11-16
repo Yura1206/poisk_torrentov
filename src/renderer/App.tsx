@@ -1845,7 +1845,22 @@ function TorrentDetailModal({
             <div className="tv-rating-card kp">
               <div className="tv-rating-header">
                 <span className="tv-rating-logo kp">КИНОПОИСК</span>
-                {ratings?.kpVotes && <span className="tv-rating-votes">{ratings.kpVotes} оценок</span>}
+                <div className="tv-rating-header-right">
+                  {ratings?.kpVotes && <span className="tv-rating-votes">{ratings.kpVotes} оценок</span>}
+                  {ratings?.kpVotes && <span className="tv-rating-dot">·</span>}
+                  <button
+                    type="button"
+                    className="tv-rating-reviews-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const url = ratings?.kpReviewsUrl || `https://www.kinopoisk.ru/index.php?kp_query=${encodeURIComponent(item.title)}`;
+                      void window.torrentApi.openExternal(url);
+                    }}
+                    title="Открыть отзывы на Кинопоиске в браузере"
+                  >
+                    Отзывы
+                  </button>
+                </div>
               </div>
               <div className="tv-rating-score-row">
                 <div className="tv-rating-score-left">
@@ -1857,25 +1872,28 @@ function TorrentDetailModal({
                     {ratingsLoading ? '…' : (ratings?.kp || '—')}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className="tv-rating-reviews-link"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const url = ratings?.kpReviewsUrl || `https://www.kinopoisk.ru/index.php?kp_query=${encodeURIComponent(item.title)}`;
-                    void window.torrentApi.openExternal(url);
-                  }}
-                  title="Открыть отзывы на Кинопоиске в браузере"
-                >
-                  Отзывы
-                </button>
               </div>
             </div>
 
             <div className="tv-rating-card imdb">
               <div className="tv-rating-header">
                 <span className="tv-rating-logo imdb">IMDb</span>
-                {ratings?.imdbVotes && <span className="tv-rating-votes">{ratings.imdbVotes} оценок</span>}
+                <div className="tv-rating-header-right">
+                  {ratings?.imdbVotes && <span className="tv-rating-votes">{ratings.imdbVotes} оценок</span>}
+                  {ratings?.imdbVotes && <span className="tv-rating-dot">·</span>}
+                  <button
+                    type="button"
+                    className="tv-rating-reviews-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const url = ratings?.imdbReviewsUrl || `https://www.imdb.com/find/?q=${encodeURIComponent(item.title)}&s=tt`;
+                      void window.torrentApi.openExternal(url);
+                    }}
+                    title="Открыть отзывы на IMDb в браузере"
+                  >
+                    Отзывы
+                  </button>
+                </div>
               </div>
               <div className="tv-rating-score-row">
                 <div className="tv-rating-score-left">
@@ -1884,18 +1902,6 @@ function TorrentDetailModal({
                     {ratingsLoading ? '…' : (ratings?.imdb || '—')}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className="tv-rating-reviews-link"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const url = ratings?.imdbReviewsUrl || `https://www.imdb.com/find/?q=${encodeURIComponent(item.title)}&s=tt`;
-                    void window.torrentApi.openExternal(url);
-                  }}
-                  title="Открыть отзывы на IMDb в браузере"
-                >
-                  Отзывы
-                </button>
               </div>
             </div>
           </div>
