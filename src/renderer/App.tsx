@@ -330,7 +330,7 @@ export default function App() {
       if (!key || seen.has(key)) continue;
       seen.add(key);
       if (!globalRatingsCache.has(key)) {
-        void window.torrentApi.resolveRatings?.(item.title, item.year).then((r) => {
+        void window.torrentApi.resolveRatings?.(item.title, item.year, item.pageUrl).then((r) => {
           globalRatingsCache.set(key, r ?? null);
         }).catch(() => {});
       }
@@ -1073,7 +1073,13 @@ export default function App() {
                 onSelect={(year) => updateFilter('years', year ? [year] : [])}
               />
             )}
-            {facets.seasons.length > 0 && <FilterGroup title="Сезон" values={facets.seasons} labels={Object.fromEntries(facets.seasons.map((season) => [season, `S${season}`]))} active={filters.seasons} onToggle={(value) => updateFilter('seasons', toggle(filters.seasons, value))} />}
+            {facets.seasons.length > 0 && (
+              <SeasonDropdown
+                seasons={facets.seasons}
+                activeSeason={filters.seasons?.[0]}
+                onSelect={(season) => updateFilter('seasons', season ? [season] : [])}
+              />
+            )}
             {facets.parts.length > 0 && <FilterGroup title="Часть" values={facets.parts} labels={Object.fromEntries(facets.parts.map((part) => [part, `Часть ${part}`]))} active={filters.parts} onToggle={(value) => updateFilter('parts', toggle(filters.parts, value))} />}
           </div>
           <button
@@ -1412,6 +1418,82 @@ function YearDropdown({
   );
 }
 
+function SeasonDropdown({
+  seasons,
+  activeSeason,
+  onSelect
+}: {
+  seasons: number[];
+  activeSeason?: number;
+  onSelect(season?: number): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="year-dropdown-wrap" ref={containerRef}>
+      <span className="filter-label">Сезон</span>
+      <button
+        type="button"
+        className={`chip dropdown-trigger ${activeSeason ? 'active' : ''}`}
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Выбрать сезон из выпадающего списка"
+      >
+        <span>{activeSeason ? `S${activeSeason}` : 'Все'}</span>
+        <span className="dropdown-arrow">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="year-dropdown-menu" role="listbox">
+          <button
+            type="button"
+            className={`year-dropdown-item ${!activeSeason ? 'selected' : ''}`}
+            onClick={() => {
+              onSelect(undefined);
+              setOpen(false);
+            }}
+          >
+            Все сезоны
+          </button>
+          {seasons.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`year-dropdown-item ${activeSeason === s ? 'selected' : ''}`}
+              onClick={() => {
+                onSelect(activeSeason === s ? undefined : s);
+                setOpen(false);
+              }}
+            >
+              Сезон {s} (S{s})
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FilterGroup<T extends string | number>({ title, values, labels, active, onToggle }: { title: string; values: T[]; labels: Record<string | number, string>; active: T[]; onToggle(value: T): void }) {
   return <div className="filter-group"><span className="filter-label">{title}</span>{values.map((value) => <button type="button" className={active.includes(value) ? 'chip active' : 'chip'} onClick={() => onToggle(value)} key={value}>{labels[value]}</button>)}</div>;
 }
@@ -1716,7 +1798,7 @@ function TorrentDetailModal({
       return;
     }
     setRatingsLoading(true);
-    void window.torrentApi.resolveRatings?.(item.title, item.year).then((r) => {
+    void window.torrentApi.resolveRatings?.(item.title, item.year, item.pageUrl).then((r) => {
       globalRatingsCache.set(cacheKey, r ?? null);
       if (active) {
         setRatings(r ?? null);

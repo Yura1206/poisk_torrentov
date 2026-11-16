@@ -156,8 +156,8 @@ function registerIpc(): void {
   ipcMain.handle('poster:resolve', async (_event, title: string, year?: number, pageUrl?: string, contentType?: string) =>
     posterService.resolvePoster(title, year, pageUrl, contentType)
   );
-  ipcMain.handle('ratings:resolve', async (_event, title: string, year?: number) =>
-    posterService.resolveRatings(title, year)
+  ipcMain.handle('ratings:resolve', async (_event, title: string, year?: number, pageUrl?: string) =>
+    posterService.resolveRatings(title, year, pageUrl)
   );
   ipcMain.handle('gateways:test', async (_event, workerUrl?: string, backupUrl?: string): Promise<GatewayTestResult> => {
     const wUrl = (workerUrl || storage.settings.cloudflareWorkerUrl || DEFAULT_CLOUDFLARE_WORKER_URL).trim().replace(/\/+$/, '');

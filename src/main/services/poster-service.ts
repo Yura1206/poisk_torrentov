@@ -75,6 +75,54 @@ const KNOWN_TITLE_POSTERS: Record<string, string> = {
   'импровизаторы': 'https://image.tmdb.org/t/p/w500/eOPV6kYaEmmUSodummut6bSxBWm.jpg'
 };
 
+const KNOWN_KINOPOISK_IDS: Record<string, string> = {
+  'камеди клаб': '400612',
+  'камедиклаб': '400612',
+  'comedy club': '400612',
+  'comedyclub': '400612',
+  'сашатаня': '630232',
+  'саша таня': '630232',
+  'битва экстрасенсов': '74218',
+  'битваэкстрасенсов': '74218',
+  'новая битва экстрасенсов': '5064614',
+  'экстрасенсы битва сильнейших': '5261173',
+  'звезды в джунглях': '14171220',
+  'звёзды в джунглях': '14171220',
+  'звезды в африке': '1444158',
+  'звёзды в африке': '1444158',
+  'однажды в россии': '843343',
+  'уральские пельмени': '632863',
+  'женский стендап': '1341113',
+  'квн': '409477',
+  'высшая лига квн': '409477',
+  'шоу воли': '5280765',
+  'импровизация': '958564',
+  'импровизаторы': '5258957',
+  'comedy woman': '468160',
+  'камеди вумен': '468160',
+  'comedy баттл': '522434',
+  'stand up': '778311',
+  'стендап': '778311',
+  'что было дальше': '1314643',
+  'чбд': '1314643',
+  'универ': '420848',
+  'универ новая общага': '631245',
+  'универ 10 лет спустя': '1406622',
+  'универ 13 лет спустя': '5434771',
+  'интерны': '505781',
+  'папины дочки': '409295',
+  'папины дочки новые': '5235882',
+  'реальные пацаны': '526541',
+  'физрук': '764491',
+  'полицейский с рублевки': '843803',
+  'жуки': '1112443',
+  'счастливы вместе': '277490',
+  'кухня': '683416',
+  'отель элеон': '972846',
+  'гранд': '1115320',
+  'ивановы ивановы': '1047712'
+};
+
 export function titlesMatch(target: string, candidate: string, candidateOriginal?: string): boolean {
   const normTarget = normalizeTitle(target);
   const normCand = normalizeTitle(candidate);
@@ -169,7 +217,7 @@ export class PosterService {
     this.ruTrackerPageLoader = loader;
   }
 
-  async resolveRatings(title: string, year?: number): Promise<FilmRatings | null> {
+  async resolveRatings(title: string, year?: number, pageUrl?: string): Promise<FilmRatings | null> {
     const cleanTitle = cleanTitleForSearch(title);
     if (!cleanTitle) return null;
 
@@ -181,17 +229,38 @@ export class PosterService {
       return this.ratingsPromises.get(cacheKey)!;
     }
 
-    const promise = this.fetchRatingsInternal(cleanTitle, year, cacheKey);
+    const promise = this.fetchRatingsInternal(cleanTitle, year, pageUrl, cacheKey);
     this.ratingsPromises.set(cacheKey, promise);
     return promise;
   }
 
-  private async fetchRatingsInternal(cleanTitle: string, year: number | undefined, cacheKey: string): Promise<FilmRatings | null> {
+  private async fetchRatingsInternal(
+    cleanTitle: string,
+    year: number | undefined,
+    pageUrl: string | undefined,
+    cacheKey: string
+  ): Promise<FilmRatings | null> {
     try {
       // 1. Check known or extracted KP ID first
-      const knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) || this.kpIdByTitle.get(cleanTitle.toLowerCase());
+      const normClean = normalizeTitle(cleanTitle);
+      let knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) 
+        || this.knownKpIds.get(normClean)
+        || this.kpIdByTitle.get(cleanTitle.toLowerCase())
+        || this.kpIdByTitle.get(normClean)
+        || KNOWN_KINOPOISK_IDS[cleanTitle.toLowerCase()]
+        || KNOWN_KINOPOISK_IDS[normClean];
+
+      if (!knownKpId) {
+        for (const [key, id] of Object.entries(KNOWN_KINOPOISK_IDS)) {
+          if (normClean === normalizeTitle(key) || titlesMatch(cleanTitle, key)) {
+            knownKpId = id;
+            break;
+          }
+        }
+      }
+
       if (knownKpId) {
-        const kpRatings = await this.fetchRatingsByKpId(knownKpId, cacheKey);
+        const kpRatings = await this.fetchRatingsByKpId(knownKpId, cacheKey, undefined, cleanTitle, year);
         if (kpRatings && (kpRatings.kp || kpRatings.imdb)) {
           return kpRatings;
         }
@@ -229,11 +298,28 @@ export class PosterService {
 
         const kinopoiskId = match?.kinopoiskId;
         if (kinopoiskId) {
-          return await this.fetchRatingsByKpId(kinopoiskId, cacheKey, match?.slug);
+          return await this.fetchRatingsByKpId(kinopoiskId, cacheKey, match?.slug, cleanTitle, year);
         }
       }
 
-      // Fallback: If not found in TorrentKino catalog, check IMDb Suggestion API to at least obtain IMDb ID and direct review link & IMDb rating!
+      // 3. If pageUrl is available from release, extract Kinopoisk ID directly from page
+      if (pageUrl && pageUrl.startsWith('http')) {
+        try {
+          const extractedKpId = await this.extractKinopoiskIdFromPage(pageUrl);
+          if (extractedKpId) {
+            this.kpIdByTitle.set(cleanTitle.toLowerCase(), extractedKpId);
+            this.kpIdByTitle.set(normClean, extractedKpId);
+            const kpRatings = await this.fetchRatingsByKpId(extractedKpId, cacheKey, undefined, cleanTitle, year);
+            if (kpRatings && (kpRatings.kp || kpRatings.imdb)) {
+              return kpRatings;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // 4. Fallback: If not found in TorrentKino catalog or page, check IMDb Suggestion API
       const imdbFallback = await this.fetchImdbFallback(cleanTitle, year);
       if (imdbFallback) {
         this.ratingsCache.set(cacheKey, imdbFallback);
@@ -245,6 +331,58 @@ export class PosterService {
     } catch {
       this.ratingsCache.set(cacheKey, null);
       return null;
+    } finally {
+      this.ratingsPromises.delete(cacheKey);
+    }
+  }
+
+  private async fetchImdbId(cleanTitle: string, year?: number): Promise<string | null> {
+    try {
+      const suggestUrl = `https://v3.sg.media-imdb.com/suggestion/x/${encodeURIComponent(cleanTitle)}.json`;
+      const res = await fetch(suggestUrl, {
+        headers: { 'User-Agent': APP_USER_AGENT },
+        signal: AbortSignal.timeout(2000)
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { d?: Array<{ id?: string; l?: string; y?: number }> };
+      if (!Array.isArray(data.d) || data.d.length === 0) return null;
+      let match = data.d.find((item) => item.id && item.l && titlesMatch(cleanTitle, item.l));
+      if (!match && year) {
+        match = data.d.find((item) => item.id && item.l && titlesMatch(cleanTitle, item.l) && item.y && Math.abs(item.y - year) <= 1);
+      }
+      return match?.id || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async extractKinopoiskIdFromPage(pageUrl: string): Promise<string | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      let html = '';
+      if (pageUrl.includes('rutracker.org') && this.ruTrackerPageLoader) {
+        html = await this.ruTrackerPageLoader(pageUrl, controller.signal);
+      } else if (pageUrl.includes('nnmclub') || pageUrl.includes('megapeer') || pageUrl.includes('rutor')) {
+        const encoding = pageUrl.includes('megapeer') || pageUrl.includes('nnmclub') ? 'win1251' : 'utf8';
+        html = await fetchPage(pageUrl, controller.signal, encoding);
+      } else {
+        const res = await fetch(pageUrl, {
+          signal: controller.signal,
+          headers: { 'User-Agent': APP_USER_AGENT }
+        });
+        if (!res.ok) return null;
+        html = await res.text();
+      }
+      const kpMatch = html.match(/(?:kinopoisk\.ru\/(?:film|series|level\/1\/film)|rating\.kinopoisk\.ru)\/(\d+)/i);
+      if (kpMatch && kpMatch[1] && kpMatch[1].length >= 4) {
+        return kpMatch[1];
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -319,16 +457,30 @@ export class PosterService {
           // Ignore GraphQL errors
         }
 
-        const knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) || this.kpIdByTitle.get(cleanTitle.toLowerCase());
+        const normClean = normalizeTitle(cleanTitle);
+        let knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) 
+          || this.knownKpIds.get(normClean)
+          || this.kpIdByTitle.get(cleanTitle.toLowerCase())
+          || this.kpIdByTitle.get(normClean)
+          || KNOWN_KINOPOISK_IDS[cleanTitle.toLowerCase()]
+          || KNOWN_KINOPOISK_IDS[normClean];
+        if (!knownKpId) {
+          for (const [key, id] of Object.entries(KNOWN_KINOPOISK_IDS)) {
+            if (normClean === normalizeTitle(key) || titlesMatch(cleanTitle, key)) {
+              knownKpId = id;
+              break;
+            }
+          }
+        }
         let kpData: FilmRatings | null = null;
         if (knownKpId) {
-          kpData = await this.fetchRatingsByKpId(knownKpId, `${cleanTitle.toLowerCase()}:${year ?? ''}`);
+          kpData = await this.fetchRatingsByKpId(knownKpId, `${cleanTitle.toLowerCase()}:${year ?? ''}`, undefined, cleanTitle, year);
         }
 
         return {
           kp: kpData?.kp,
           kpVotes: kpData?.kpVotes,
-          kpReviewsUrl: kpData?.kpReviewsUrl,
+          kpReviewsUrl: kpData?.kpReviewsUrl || (knownKpId ? `https://www.kinopoisk.ru/film/${knownKpId}/reviews/` : undefined),
           kpNotFormed: kpData?.kpNotFormed,
           imdb: imdbScore || kpData?.imdb,
           imdbVotes: imdbVotes || kpData?.imdbVotes,
@@ -342,7 +494,13 @@ export class PosterService {
     }
   }
 
-  async fetchRatingsByKpId(kinopoiskId: string | number, cacheKey: string, slug?: string): Promise<FilmRatings | null> {
+  async fetchRatingsByKpId(
+    kinopoiskId: string | number,
+    cacheKey: string,
+    slug?: string,
+    cleanTitle?: string,
+    year?: number
+  ): Promise<FilmRatings | null> {
     if (this.ratingsCache.has(cacheKey)) {
       return this.ratingsCache.get(cacheKey) ?? null;
     }
@@ -396,7 +554,15 @@ export class PosterService {
       const isKpNotFormed = kpNum === 0 && kpVotesNum > 0;
 
       const kpReviewsUrl = kinopoiskId ? `https://www.kinopoisk.ru/film/${kinopoiskId}/reviews/` : undefined;
-      const imdbReviewsUrl = pageData.imdbId ? `https://www.imdb.com/title/${pageData.imdbId}/reviews/` : undefined;
+      let imdbReviewsUrl = pageData.imdbId ? `https://www.imdb.com/title/${pageData.imdbId}/reviews/` : undefined;
+
+      // If pageData had no IMDb ID, but IMDb rating exists, try looking up IMDb ID for direct reviews link
+      if (!imdbReviewsUrl && imdbNum > 0 && cleanTitle) {
+        const imdbId = await this.fetchImdbId(cleanTitle, year);
+        if (imdbId) {
+          imdbReviewsUrl = `https://www.imdb.com/title/${imdbId}/reviews/`;
+        }
+      }
 
       const ratings: FilmRatings = {
         kp: kpNum > 0 ? kpNum.toFixed(1) : (isKpNotFormed ? 'Не сформирован' : undefined),
@@ -534,7 +700,7 @@ export class PosterService {
       // 5. Fallback: extract poster directly from the torrent release page (for TV shows, rare items not on IMDb)
       if (pageUrl && pageUrl.startsWith('http')) {
         try {
-          const pagePoster = await this.extractPosterFromPage(pageUrl);
+          const pagePoster = await this.extractPosterFromPage(pageUrl, cleanTitle);
           if (pagePoster) {
             return storePoster(pagePoster);
           }
@@ -688,7 +854,7 @@ export class PosterService {
     return promise;
   }
 
-  private async extractPosterFromPage(pageUrl: string): Promise<string | null> {
+  private async extractPosterFromPage(pageUrl: string, cleanTitle?: string): Promise<string | null> {
     // Fast path for TorrentKino: slug from url gives the exact poster immediately
     if (pageUrl.includes('torrentkino.org')) {
       const slugMatch = pageUrl.match(/\/films\/([^#?\/]+)/);
@@ -724,15 +890,19 @@ export class PosterService {
       clearTimeout(timeout);
     }
 
-    return this.extractPosterFromHtml(html, pageUrl);
+    return this.extractPosterFromHtml(html, pageUrl, cleanTitle);
   }
 
-  private extractPosterFromHtml(html: string, pageUrl: string): string | null {
+  private extractPosterFromHtml(html: string, pageUrl: string, cleanTitle?: string): string | null {
     if (!html) return null;
 
     // 1. Check for Kinopoisk link in the release HTML (RuTracker, RuTor, NNMClub, MegaPeer)
     const kpMatch = html.match(/(?:kinopoisk\.ru\/(?:film|series|level\/1\/film)|rating\.kinopoisk\.ru)\/(\d+)/i);
     if (kpMatch && kpMatch[1] && kpMatch[1].length >= 4) {
+      if (cleanTitle) {
+        this.kpIdByTitle.set(cleanTitle.toLowerCase(), kpMatch[1]);
+        this.kpIdByTitle.set(normalizeTitle(cleanTitle), kpMatch[1]);
+      }
       return `https://st.kp.yandex.net/images/film_iphone/iphone360_${kpMatch[1]}.jpg`;
     }
 

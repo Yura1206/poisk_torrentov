@@ -208,4 +208,22 @@ describe('PosterService extraction', () => {
     const poster = await service.resolvePoster('Битва экстрасенсов', 2018, 'https://rutracker.org/forum/viewtopic.php?t=12345', 'series');
     expect(poster).toBe('https://image.tmdb.org/t/p/w500/yyuXEH1OP2QtwJFOm2wIMsEc03B.jpg');
   });
+
+  it('resolves Kinopoisk ratings and direct reviews URL for СашаТаня', async () => {
+    const service = new PosterService();
+    const ratings = await service.resolveRatings('СашаТаня', 2013);
+    expect(ratings).not.toBeNull();
+    expect(ratings?.kp).toBeDefined();
+    expect(parseFloat(ratings?.kp || '0')).toBeGreaterThan(4.0);
+    expect(ratings?.kpReviewsUrl).toBe('https://www.kinopoisk.ru/film/630232/reviews/');
+  });
+
+  it('marks Comedy Club as not formed instead of dash and provides direct reviews URL', async () => {
+    const service = new PosterService();
+    const ratings = await service.resolveRatings('Камеди Клаб', 2005);
+    expect(ratings).not.toBeNull();
+    expect(ratings?.kp).toBe('Не сформирован');
+    expect(ratings?.kpNotFormed).toBe(true);
+    expect(ratings?.kpReviewsUrl).toBe('https://www.kinopoisk.ru/film/400612/reviews/');
+  });
 });
