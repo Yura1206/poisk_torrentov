@@ -14,6 +14,10 @@ describe('titlesMatch', () => {
     expect(titlesMatch('Звёзды в джунглях', 'Звёзды в Сибири')).toBe(false);
     expect(titlesMatch('Матрица', 'Метро')).toBe(false);
     expect(titlesMatch('Терминатор', 'Гладиатор')).toBe(false);
+    // Comedy Club vs Palestine Comedy Club must NEVER match
+    expect(titlesMatch('Comedy Club', 'Palestine Comedy Club')).toBe(false);
+    expect(titlesMatch('Камеди Клаб', 'Palestine Comedy Club')).toBe(false);
+    expect(titlesMatch('Comedy Club', 'Камеди Клаб')).toBe(true);
   });
 });
 
@@ -190,5 +194,18 @@ describe('PosterService extraction', () => {
     // @ts-expect-error accessing private method for unit test
     const extracted = service.extractPosterFromHtml(html, 'https://nnmclub.to/forum/viewtopic.php?t=123');
     expect(extracted).toBeNull();
+  });
+
+  it('resolves correct official poster for Comedy Club and never Palestine Comedy Club', async () => {
+    const service = new PosterService();
+    const poster = await service.resolvePoster('Comedy Club', 2025, 'https://rutracker.org/forum/viewtopic.php?t=6654836', 'series');
+    expect(poster).toBe('https://image.tmdb.org/t/p/w500/tPIbd7JZVxSWNjcJQYEvPu3qo5z.jpg');
+    expect(poster).not.toContain('BODJjOTcwM2EtYmE5MS00ZDcxLTliMWEtOGJlNjU3NThlYjRh');
+  });
+
+  it('resolves poster for Битва экстрасенсов across seasons', async () => {
+    const service = new PosterService();
+    const poster = await service.resolvePoster('Битва экстрасенсов', 2018, 'https://rutracker.org/forum/viewtopic.php?t=12345', 'series');
+    expect(poster).toBe('https://image.tmdb.org/t/p/w500/yyuXEH1OP2QtwJFOm2wIMsEc03B.jpg');
   });
 });

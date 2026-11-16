@@ -39,6 +39,42 @@ function normalizeTitle(s: string): string {
   return (s || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 }
 
+const TMDB_API_KEY = '4ef0d7355d9ffb5151e987764708ce96';
+
+const TITLE_SEARCH_ALIASES: Record<string, string[]> = {
+  'comedy club': ['камеди клаб'],
+  'камеди клаб': ['comedy club'],
+  'comedy баттл': ['камеди баттл', 'comedy battle'],
+  'comedy battle': ['камеди баттл', 'comedy баттл'],
+  'comedy woman': ['камеди вумен'],
+  'камеди вумен': ['comedy woman'],
+  'stand up': ['стендап'],
+  'стендап': ['stand up'],
+  'женский stand up': ['женский стендап'],
+  'женский стендап': ['женский stand up'],
+  'что было дальше': ['чбд'],
+  'чбд': ['что было дальше']
+};
+
+const KNOWN_TITLE_POSTERS: Record<string, string> = {
+  'камеди клаб': 'https://image.tmdb.org/t/p/w500/tPIbd7JZVxSWNjcJQYEvPu3qo5z.jpg',
+  'comedy club': 'https://image.tmdb.org/t/p/w500/tPIbd7JZVxSWNjcJQYEvPu3qo5z.jpg',
+  'битва экстрасенсов': 'https://image.tmdb.org/t/p/w500/yyuXEH1OP2QtwJFOm2wIMsEc03B.jpg',
+  'новая битва экстрасенсов': 'https://image.tmdb.org/t/p/w500/krfOtowO5jsrcZnsT8mGxiBpGyH.jpg',
+  'звезды в джунглях': 'https://m.media-amazon.com/images/M/MV5BMDdlM2FhOTctYzJhOS00MWRlLWI4M2MtZDljNzI3ZjNlNDA4XkEyXkFqcGc@._V1_QL75_UX380_.jpg',
+  'звёзды в джунглях': 'https://m.media-amazon.com/images/M/MV5BMDdlM2FhOTctYzJhOS00MWRlLWI4M2MtZDljNzI3ZjNlNDA4XkEyXkFqcGc@._V1_QL75_UX380_.jpg',
+  'звезды в африке': 'https://image.tmdb.org/t/p/w500/1TMCGy8l6C4XdSvcVDaN3hfMmGs.jpg',
+  'звёзды в африке': 'https://image.tmdb.org/t/p/w500/1TMCGy8l6C4XdSvcVDaN3hfMmGs.jpg',
+  'однажды в россии': 'https://image.tmdb.org/t/p/w500/A57leDI80aTVDudNMj70WZ7pPGD.jpg',
+  'уральские пельмени': 'https://image.tmdb.org/t/p/w500/4kcPDFsBItXJMc44ODV79N1dfZO.jpg',
+  'женский стендап': 'https://image.tmdb.org/t/p/w500/xWRuqeS53IkNGztZri3hcUgMQ5S.jpg',
+  'квн': 'https://image.tmdb.org/t/p/w500/5DtKLe8ZTSZfuav8DyedJrZDmIF.jpg',
+  'высшая лига квн': 'https://image.tmdb.org/t/p/w500/5DtKLe8ZTSZfuav8DyedJrZDmIF.jpg',
+  'шоу воли': 'https://image.tmdb.org/t/p/w500/oWcnKSpnYFfCpqItJSUK0oOJFmk.jpg',
+  'импровизация': 'https://image.tmdb.org/t/p/w500/pzk3vvV9uO5JkNXAvlKsE0uuXID.jpg',
+  'импровизаторы': 'https://image.tmdb.org/t/p/w500/eOPV6kYaEmmUSodummut6bSxBWm.jpg'
+};
+
 export function titlesMatch(target: string, candidate: string, candidateOriginal?: string): boolean {
   const normTarget = normalizeTitle(target);
   const normCand = normalizeTitle(candidate);
@@ -48,6 +84,16 @@ export function titlesMatch(target: string, candidate: string, candidateOriginal
 
   // Exact equality
   if (normTarget === normCand || (normOrig && normTarget === normOrig)) return true;
+
+  // Check aliases (e.g. Comedy Club <-> Камеди Клаб)
+  for (const [key, aliases] of Object.entries(TITLE_SEARCH_ALIASES)) {
+    if (normTarget === normalizeTitle(key)) {
+      for (const al of aliases) {
+        const normAl = normalizeTitle(al);
+        if (normCand === normAl || (normOrig && normOrig === normAl)) return true;
+      }
+    }
+  }
 
   // Transliteration match (e.g. Russian "Звёзды в джунглях" vs IMDb "Zvyozdy v Dzhunglyakh")
   const translitTarget = normalizeTitle(transliterateRuToEn(target));
@@ -74,6 +120,12 @@ export function titlesMatch(target: string, candidate: string, candidateOriginal
 
   const diffWords1 = targetWords.filter((w) => !candWords.some((cw) => cw.includes(w) || w.includes(cw)));
   const diffWords2 = candWords.filter((cw) => !targetWords.some((w) => w.includes(cw) || cw.includes(w)));
+
+  // If candidate has significant extra words (>3 chars) that don't exist in target, it is a different film/spin-off!
+  // E.g. Target: "Comedy Club" vs Candidate: "Palestine Comedy Club" -> 'palestine' is extra!
+  const stopWords = new Set(['сериал', 'фильм', 'movie', 'series', 'show', 'шоу', 'part', 'часть', 'season', 'сезон']);
+  const significantExtraInCand = diffWords2.filter((w) => w.length > 3 && !stopWords.has(w));
+  if (significantExtraInCand.length > 0) return false;
 
   // If both have conflicting significant words (>3 chars), they are definitely different films/shows
   const hasConflictingWords = diffWords1.some((w) => w.length > 3) && diffWords2.some((w) => w.length > 3);
@@ -429,6 +481,23 @@ export class PosterService {
         return url;
       };
 
+      // 0. Known title posters (instant 0ms lookup for common TV shows / reality)
+      if (cleanTitle) {
+        const normClean = normalizeTitle(cleanTitle);
+        let known = KNOWN_TITLE_POSTERS[cleanTitle.toLowerCase()] || KNOWN_TITLE_POSTERS[normClean];
+        if (!known) {
+          for (const [key, posterUrl] of Object.entries(KNOWN_TITLE_POSTERS)) {
+            if (normClean === normalizeTitle(key) || titlesMatch(cleanTitle, key)) {
+              known = posterUrl;
+              break;
+            }
+          }
+        }
+        if (known) {
+          return storePoster(known);
+        }
+      }
+
       // 1. First priority: fast catalog search by title & year & contentType (instant 50-80ms CDN poster)
       if (cleanTitle) {
         const catalogPoster = await this.getOrSearchCatalog(cleanTitle, year, contentType);
@@ -446,15 +515,23 @@ export class PosterService {
         }
       }
 
-      // 3. High quality official poster from IMDb (fast 50-100ms, highly reliable CDN, never expires or returns 404)
+      // 3. TMDB API search (rich coverage for TV series, shows, anime, movies with Russian metadata)
       if (cleanTitle) {
-        const imdbPoster = await this.fetchImdbPoster(cleanTitle, year);
+        const tmdbPoster = await this.fetchTmdbPoster(cleanTitle, year, contentType);
+        if (tmdbPoster) {
+          return storePoster(tmdbPoster);
+        }
+      }
+
+      // 4. High quality official poster from IMDb (fast 50-100ms, highly reliable CDN, never expires or returns 404)
+      if (cleanTitle) {
+        const imdbPoster = await this.fetchImdbPoster(cleanTitle, year, contentType);
         if (imdbPoster) {
           return storePoster(imdbPoster);
         }
       }
 
-      // 4. Fallback: extract poster directly from the torrent release page (for TV shows, rare items not on IMDb)
+      // 5. Fallback: extract poster directly from the torrent release page (for TV shows, rare items not on IMDb)
       if (pageUrl && pageUrl.startsWith('http')) {
         try {
           const pagePoster = await this.extractPosterFromPage(pageUrl);
@@ -472,7 +549,75 @@ export class PosterService {
     }
   }
 
-  private async fetchImdbPoster(cleanTitle: string, year?: number): Promise<string | null> {
+  private async fetchTmdbPoster(cleanTitle: string, year?: number, contentType?: string): Promise<string | null> {
+    try {
+      const isTv = contentType === 'series' || contentType === 'reality' || !contentType;
+      const queries = [cleanTitle];
+      const norm = normalizeTitle(cleanTitle);
+      for (const [key, aliases] of Object.entries(TITLE_SEARCH_ALIASES)) {
+        if (norm === normalizeTitle(key)) {
+          queries.push(...aliases);
+        }
+      }
+
+      for (const q of queries) {
+        const endpoints = isTv ? ['search/tv', 'search/movie'] : ['search/movie', 'search/tv'];
+        for (const ep of endpoints) {
+          const url = `https://api.themoviedb.org/3/${ep}?query=${encodeURIComponent(q)}&api_key=${TMDB_API_KEY}&language=ru-RU`;
+          const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+          if (!res.ok) continue;
+          const data = (await res.json()) as {
+            results?: Array<{
+              id?: number;
+              name?: string;
+              title?: string;
+              original_name?: string;
+              original_title?: string;
+              poster_path?: string;
+              origin_country?: string[];
+              original_language?: string;
+              first_air_date?: string;
+              release_date?: string;
+            }>;
+          };
+          if (!Array.isArray(data.results) || data.results.length === 0) continue;
+
+          // Prioritize Russian origin for shows / domestic releases
+          const results = [...data.results].sort((a, b) => {
+            const aRu = (a.origin_country || []).includes('RU') || a.original_language === 'ru';
+            const bRu = (b.origin_country || []).includes('RU') || b.original_language === 'ru';
+            return (bRu ? 1 : 0) - (aRu ? 1 : 0);
+          });
+
+          for (const item of results) {
+            if (!item.poster_path) continue;
+            const candTitle = item.name || item.title || '';
+            const candOrig = item.original_name || item.original_title || '';
+            if (!candTitle && !candOrig) continue;
+
+            const isMatch = titlesMatch(cleanTitle, candTitle, candOrig) || titlesMatch(q, candTitle, candOrig);
+            if (!isMatch) continue;
+
+            const firstYear = parseInt((item.first_air_date || item.release_date || '').slice(0, 4), 10);
+            if (year && firstYear) {
+              if (ep.includes('tv') || contentType === 'series' || contentType === 'reality') {
+                if (year < firstYear - 1) continue;
+              } else if (Math.abs(firstYear - year) > 1) {
+                continue;
+              }
+            }
+
+            return `https://image.tmdb.org/t/p/w500${item.poster_path}`;
+          }
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchImdbPoster(cleanTitle: string, year?: number, contentType?: string): Promise<string | null> {
     try {
       const suggestUrl = `https://v3.sg.media-imdb.com/suggestion/x/${encodeURIComponent(cleanTitle)}.json`;
       const res = await fetch(suggestUrl, {
@@ -493,7 +638,13 @@ export class PosterService {
       let match = data.d.find((item) => {
         if (!item.id || !item.l || !item.i?.imageUrl) return false;
         if (!titlesMatch(cleanTitle, item.l)) return false;
-        if (year && item.y && Math.abs(item.y - year) > 1) return false;
+        if (year && item.y) {
+          if (contentType === 'series' || contentType === 'reality') {
+            if (year < item.y - 1) return false;
+          } else if (Math.abs(item.y - year) > 1) {
+            return false;
+          }
+        }
         return true;
       });
       if (!match) {
