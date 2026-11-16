@@ -5,7 +5,7 @@ import {
   cleanAndDeduplicateVoices,
   correlateSeasonAndYear,
   detectContentType, exactTitleMatches, extractDnFromMagnet, extractDynamicRange, extractPart, extractResolution,
-  extractSeason, extractStudios, isVideoRelease, normalTitleMatches, parseSizeBytes, parseTopicHtml,
+  extractSeason, extractSeasons, extractStudios, isVideoRelease, normalTitleMatches, parseSizeBytes, parseTopicHtml,
   parseTrackerVoiceTags, russianLanguageStatus, titleFromRelease
 } from './metadata';
 
@@ -54,6 +54,10 @@ describe('метаданные релизов', () => {
   it('извлекает сезоны, части и студии', () => {
     expect(extractSeason('S03 1-8')).toBe(3);
     expect(extractSeason('2 сезон, 10 серий')).toBe(2);
+    expect(extractSeason('Звёзды в джунглях (сезон 1-14 серии)')).toBe(1);
+    expect(extractSeasons('Звёзды в джунглях (сезон 1-14 серии)')).toEqual([1]);
+    expect(extractSeasons('Звёзды в джунглях [сезон 1-14 выпуск]')).toEqual([1]);
+    expect(extractSeasons('Звёзды в джунглях [1-3 сезоны]')).toEqual([1, 2, 3]);
     expect(extractPart('Дюна: Часть 2')).toBe(2);
     expect(extractStudios('LostFilm, русская озвучка')).toContain('LostFilm');
     expect(extractStudios('Релиз: Кубик в кубе')).toContain('Кубик в кубе');

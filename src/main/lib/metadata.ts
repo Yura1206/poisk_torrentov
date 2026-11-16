@@ -289,9 +289,14 @@ export function correlateSeasonAndYear(item: {
   return { year: item.year, years: item.years, season: item.season, seasons: item.seasons };
 }
 
+function isEpisodeAfterSeasonRange(matchStr: string, fullText: string, matchIndex: number): boolean {
+  const after = fullText.slice(matchIndex + matchStr.length).trim();
+  return /^(?:сери[ийя]|эпизод(?:ы|а|ов)?|выпуск(?:и|а|ов)?|из\s*\d+)(?:[^\p{L}\p{N}]|$)/iu.test(after);
+}
+
 export function extractSeason(value: string): number | undefined {
   const rangeMatch = value.match(/(?:сезон(?:ы|а)?|season(?:s)?|\bS)\s*0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\b|0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\s*сезон/iu);
-  if (rangeMatch) {
+  if (rangeMatch && !isEpisodeAfterSeasonRange(rangeMatch[0], value, rangeMatch.index ?? 0)) {
     return Number(rangeMatch[1] ?? rangeMatch[3]);
   }
   const match = value.match(/(?:\bS|сезон\s*|с\.)0?(\d{1,2})\b|(\d{1,2})\s*сезон/iu);
@@ -300,7 +305,7 @@ export function extractSeason(value: string): number | undefined {
 
 export function extractSeasons(value: string): number[] {
   const rangeMatch = value.match(/(?:сезон(?:ы|а)?|season(?:s)?|\bS)\s*0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\b|0?(\d{1,2})\s*[-–—]\s*0?(\d{1,2})\s*сезон/iu);
-  if (rangeMatch) {
+  if (rangeMatch && !isEpisodeAfterSeasonRange(rangeMatch[0], value, rangeMatch.index ?? 0)) {
     const start = Number(rangeMatch[1] ?? rangeMatch[3]);
     const end = Number(rangeMatch[2] ?? rangeMatch[4]);
     if (start >= 1 && end >= start && end - start <= 40) {

@@ -72,7 +72,7 @@ describe('PosterService extraction', () => {
     `;
     // @ts-expect-error accessing private method for unit test
     const extracted = service.extractPosterFromHtml(html, 'https://nnmclub.to/forum/viewtopic.php?t=1473669');
-    expect(extracted).toBe('https://nnmstatic.win/forum/image.php?link=http://funkyimg.com/i/33SWm.jpg');
+    expect(extracted).toBe('http://funkyimg.com/i/33SWm.jpg');
     expect(extracted).not.toContain('rss.png');
   });
 
@@ -125,5 +125,70 @@ describe('PosterService extraction', () => {
     // For movie 1995, it should resolve to dzhumandzhi-1995.webp
     const moviePoster = await service.resolvePoster('Джуманджи', 1995, 'https://rutor.info/torrent/54321', 'movie');
     expect(moviePoster).toContain('dzhumandzhi-1995.webp');
+  });
+
+  it('shares resolved poster across other release cards for the same title', async () => {
+    const service = new PosterService();
+    // 1. First card (e.g. MegaPeer) resolves poster from its page HTML
+    const card1Poster = await service.resolvePoster(
+      'Звёзды в джунглях',
+      2024,
+      'https://megapeer.vip/torrent/999'
+    );
+    // Since megapeer 999 doesn't really exist, it should fallback to IMDb or if simulated:
+    // Let's test explicit title sharing:
+    // @ts-expect-error test private cache
+    service.titlePosterCache.set('звёзды в джунглях:2024:', 'https://cdn.example.com/stars_poster.jpg');
+
+    // 2. Second card (e.g. RuTracker or NNM) requests poster for same title
+    const card2Poster = await service.resolvePoster(
+      'Звёзды в джунглях',
+      2024,
+      'https://rutracker.org/forum/viewtopic.php?t=1111'
+    );
+    expect(card2Poster).toBe('https://cdn.example.com/stars_poster.jpg');
+  });
+
+  it('marks Kinopoisk rating as not formed when rating is 0 but votes exist', async () => {
+    const service = new PosterService();
+    // Mock fetch for rating.kinopoisk.ru/14171220.xml
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('rating.kinopoisk.ru/14171220.xml')) {
+        return new Response(
+          '<?xml version="1.0" encoding="WINDOWS-1251"?><rating><kp_rating num_vote="81">0</kp_rating><imdb_rating num_vote="29">6.8</imdb_rating></rating>',
+          { status: 200 }
+        );
+      }
+      return origFetch(url);
+    }) as typeof fetch;
+
+    try {
+      const ratings = await service.fetchRatingsByKpId('14171220', 'test_key');
+      expect(ratings?.kp).toBe('Не сформирован');
+      expect(ratings?.kpNotFormed).toBe(true);
+      expect(ratings?.kpVotes).toBe('81');
+      expect(ratings?.imdb).toBe('6.8');
+      expect(ratings?.imdbVotes).toBe('29');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it('matches Russian reality show with Caribbean season subtitle to English transliteration', () => {
+    expect(titlesMatch('Звёзды в джунглях', 'Zvyozdy v Dzhunglyakh')).toBe(true);
+  });
+
+  it('ignores dead radikal.ru and nnmstatic.win image URLs', () => {
+    const service = new PosterService();
+    const html = `
+      <div class="postbody">
+        <var class="postImg" title="https://nnmstatic.win/forum/image.php?link=https://d.radikal.ru/d42/1912/0c/ea9393bafb18.jpg"></var>
+      </div>
+    `;
+    // @ts-expect-error accessing private method for unit test
+    const extracted = service.extractPosterFromHtml(html, 'https://nnmclub.to/forum/viewtopic.php?t=123');
+    expect(extracted).toBeNull();
   });
 });

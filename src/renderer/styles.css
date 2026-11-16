@@ -747,6 +747,12 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .tv-rating-num.good {
   color: #22c55e;
 }
+.tv-rating-num.not-formed {
+  font-size: 15px;
+  font-weight: 600;
+  color: #94a3b8;
+  letter-spacing: -0.2px;
+}
 
 .tv-action-buttons {
   display: grid;

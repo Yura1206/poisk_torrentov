@@ -85,6 +85,7 @@ export interface FilmRatings {
   kp?: string;
   kpVotes?: string;
   kpReviewsUrl?: string;
+  kpNotFormed?: boolean;
   imdb?: string;
   imdbVotes?: string;
   imdbReviewsUrl?: string;

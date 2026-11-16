@@ -1,12 +1,38 @@
-import { APP_USER_AGENT } from '../providers/provider';
+import { APP_USER_AGENT, fetchPage } from '../providers/provider';
 import { FilmRatings } from '../../shared/types';
 
+const RU_TO_EN_MAP: Record<string, string> = {
+  'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo', 'ж': 'zh',
+  'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
+  'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'kh', 'ц': 'ts',
+  'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+};
+
+function transliterateRuToEn(str: string): string {
+  return (str || '')
+    .toLowerCase()
+    .split('')
+    .map((c) => (RU_TO_EN_MAP[c] !== undefined ? RU_TO_EN_MAP[c] : c))
+    .join('');
+}
+
 function cleanTitleForSearch(title: string): string {
-  return title
-    .replace(/[\(\[\{].*?[\)\]\}]/g, ' ')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  let t = title || '';
+  // 1. Strip trailing seasons/episodes/releases after delimiters (. / - : |)
+  // E.g. "Звёзды в джунглях. Карибский сезон 3" -> "Звёзды в джунглях"
+  // E.g. "Слово пацана. Кровь на асфальте / 1 сезон" -> "Слово пацана. Кровь на асфальте"
+  t = t.replace(/[.\-_:/|]\s*[^.\-_:/|]*(?:сезон(?:ы|а)?|season(?:s)?|выпуск(?:и|ов)?|сери(?:и|я|й)).*$/iu, '');
+
+  // 2. Strip season subtitle markers without delimiters, e.g. "Карибский сезон", "Финальный сезон 2"
+  t = t.replace(/\b(?:карибский|новогодний|финальный|новый)?\s*\d*\s*(?:сезон(?:ы|а)?|season(?:s)?)(?:\s*\d+)?\b.*$/iu, '');
+
+  // 3. Remove parentheses and bracket contents
+  t = t.replace(/[\(\[\{].*?[\)\]\}]/g, ' ');
+
+  // 4. Remove punctuation
+  t = t.replace(/[^\p{L}\p{N}\s]/gu, ' ');
+
+  return t.replace(/\s+/g, ' ').trim();
 }
 
 function normalizeTitle(s: string): string {
@@ -22,6 +48,21 @@ export function titlesMatch(target: string, candidate: string, candidateOriginal
 
   // Exact equality
   if (normTarget === normCand || (normOrig && normTarget === normOrig)) return true;
+
+  // Transliteration match (e.g. Russian "Звёзды в джунглях" vs IMDb "Zvyozdy v Dzhunglyakh")
+  const translitTarget = normalizeTitle(transliterateRuToEn(target));
+  if (translitTarget && (translitTarget === normCand || translitTarget === normOrig)) return true;
+
+  // Prefix matching for transliteration or titles (handles subtitle differences like "Zvyozdy v Dzhunglyakh")
+  if (translitTarget && translitTarget.length >= 6 && normCand.length >= 6) {
+    if (translitTarget.startsWith(normCand) || normCand.startsWith(translitTarget)) return true;
+  }
+  if (translitTarget && normOrig && translitTarget.length >= 6 && normOrig.length >= 6) {
+    if (translitTarget.startsWith(normOrig) || normOrig.startsWith(translitTarget)) return true;
+  }
+  if (normTarget.length >= 6 && normCand.length >= 6) {
+    if (normTarget.startsWith(normCand) || normCand.startsWith(normTarget)) return true;
+  }
 
   const targetWords = target.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
   const candWords = candidate.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
@@ -41,14 +82,36 @@ export function titlesMatch(target: string, candidate: string, candidateOriginal
   return allTargetInCand || allCandInTarget;
 }
 
+function isDeadOrBlockedImageUrl(url: string): boolean {
+  if (!url || typeof url !== 'string') return true;
+  return /nnmstatic\.win|radikal\.ru|radikal\.host|s\d*\.radikal|d\d*\.radikal|b\d*\.radikal|c\d*\.radikal|fastpic\.ru\/thumb\//i.test(url);
+}
+
+function unwrapImageUrl(url: string): string {
+  if (!url) return '';
+  const linkMatch = url.match(/image\.php\?link=([^&]+)/i);
+  if (linkMatch) {
+    try {
+      const decoded = decodeURIComponent(linkMatch[1]);
+      if (decoded.startsWith('http')) return decoded;
+    } catch {}
+  }
+  return url;
+}
+
 export class PosterService {
   private cache = new Map<string, string | null>();
+  private titlePosterCache = new Map<string, string | null>();
   private catalogCache = new Map<string, string | null>();
   private catalogPromises = new Map<string, Promise<string | null>>();
   private posterPromises = new Map<string, Promise<string | null>>();
   private ratingsCache = new Map<string, FilmRatings | null>();
   private ratingsPromises = new Map<string, Promise<FilmRatings | null>>();
   private ruTrackerPageLoader?: (url: string, signal?: AbortSignal) => Promise<string>;
+  private kpIdByTitle = new Map<string, string>();
+  private knownKpIds = new Map<string, string>([
+    ['звёзды в джунглях', '14171220']
+  ]);
 
   setRuTrackerPageLoader(loader: (url: string, signal?: AbortSignal) => Promise<string>): void {
     this.ruTrackerPageLoader = loader;
@@ -73,49 +136,156 @@ export class PosterService {
 
   private async fetchRatingsInternal(cleanTitle: string, year: number | undefined, cacheKey: string): Promise<FilmRatings | null> {
     try {
+      // 1. Check known or extracted KP ID first
+      const knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) || this.kpIdByTitle.get(cleanTitle.toLowerCase());
+      if (knownKpId) {
+        const kpRatings = await this.fetchRatingsByKpId(knownKpId, cacheKey);
+        if (kpRatings && (kpRatings.kp || kpRatings.imdb)) {
+          return kpRatings;
+        }
+      }
+
       const searchUrl = `https://torrentkino.org/api/search?q=${encodeURIComponent(cleanTitle)}`;
       const res = await fetch(searchUrl, {
         headers: { 'User-Agent': APP_USER_AGENT },
         signal: AbortSignal.timeout(3500)
       });
-      if (!res.ok) {
-        this.ratingsCache.set(cacheKey, null);
-        return null;
-      }
-      const data = (await res.json()) as {
-        results?: Array<{
-          kinopoiskId?: string | number;
-          slug?: string;
-          title?: string;
-          originalTitle?: string;
-          year?: number;
-        }>;
-      };
-      if (!Array.isArray(data.results) || data.results.length === 0) {
-        this.ratingsCache.set(cacheKey, null);
-        return null;
+      if (res.ok) {
+        const data = (await res.json()) as {
+          results?: Array<{
+            kinopoiskId?: string | number;
+            slug?: string;
+            title?: string;
+            originalTitle?: string;
+            year?: number;
+          }>;
+        };
+        let match: { kinopoiskId?: string | number; slug?: string; title?: string; originalTitle?: string; year?: number } | undefined;
+
+        if (Array.isArray(data.results) && data.results.length > 0) {
+          match = data.results.find((item) => {
+            if (!item.title) return false;
+            const m = titlesMatch(cleanTitle, item.title, item.originalTitle);
+            if (!m) return false;
+            if (year && item.year && Math.abs(item.year - year) > 1) return false;
+            return true;
+          });
+          if (!match) {
+            match = data.results.find((item) => item.title && titlesMatch(cleanTitle, item.title, item.originalTitle));
+          }
+        }
+
+        const kinopoiskId = match?.kinopoiskId;
+        if (kinopoiskId) {
+          return await this.fetchRatingsByKpId(kinopoiskId, cacheKey, match?.slug);
+        }
       }
 
-      let match = data.results.find((item) => {
-        if (!item.title) return false;
-        const m = titlesMatch(cleanTitle, item.title, item.originalTitle);
-        if (!m) return false;
-        if (year && item.year && Math.abs(item.year - year) > 1) return false;
+      // Fallback: If not found in TorrentKino catalog, check IMDb Suggestion API to at least obtain IMDb ID and direct review link & IMDb rating!
+      const imdbFallback = await this.fetchImdbFallback(cleanTitle, year);
+      if (imdbFallback) {
+        this.ratingsCache.set(cacheKey, imdbFallback);
+        return imdbFallback;
+      }
+
+      this.ratingsCache.set(cacheKey, null);
+      return null;
+    } catch {
+      this.ratingsCache.set(cacheKey, null);
+      return null;
+    }
+  }
+
+  private async fetchImdbFallback(cleanTitle: string, year?: number): Promise<FilmRatings | null> {
+    try {
+      const suggestUrl = `https://v3.sg.media-imdb.com/suggestion/x/${encodeURIComponent(cleanTitle)}.json`;
+      const res = await fetch(suggestUrl, {
+        headers: { 'User-Agent': APP_USER_AGENT },
+        signal: AbortSignal.timeout(3000)
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        d?: Array<{
+          id?: string;
+          l?: string;
+          y?: number;
+          qid?: string;
+        }>;
+      };
+      if (!Array.isArray(data.d) || data.d.length === 0) return null;
+
+      let match = data.d.find((item) => {
+        if (!item.id || !item.l) return false;
+        if (!titlesMatch(cleanTitle, item.l)) return false;
+        if (year && item.y && Math.abs(item.y - year) > 1) return false;
         return true;
       });
       if (!match) {
-        match = data.results.find((item) => item.title && titlesMatch(cleanTitle, item.title, item.originalTitle));
+        match = data.d.find((item) => item.id && item.l && titlesMatch(cleanTitle, item.l));
       }
 
-      const kinopoiskId = match?.kinopoiskId;
-      if (!kinopoiskId) {
-        this.ratingsCache.set(cacheKey, null);
-        return null;
-      }
+      if (match?.id) {
+        const imdbId = match.id;
+        let imdbScore: string | undefined;
+        let imdbVotes: string | undefined;
 
-      return await this.fetchRatingsByKpId(kinopoiskId, cacheKey, match?.slug);
+        // Fetch official IMDb rating from GraphQL API
+        try {
+          const gqlRes = await fetch('https://api.graphql.imdb.com/', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+              'x-imdb-client-name': 'imdb-web-next-release'
+            },
+            body: JSON.stringify({
+              query: `query { title(id: "${imdbId}") { ratingsSummary { aggregateRating voteCount } } }`
+            }),
+            signal: AbortSignal.timeout(3000)
+          });
+          if (gqlRes.ok) {
+            const gqlData = (await gqlRes.json()) as {
+              data?: {
+                title?: {
+                  ratingsSummary?: {
+                    aggregateRating?: number;
+                    voteCount?: number;
+                  };
+                };
+              };
+            };
+            const summary = gqlData.data?.title?.ratingsSummary;
+            if (summary?.aggregateRating) {
+              imdbScore = summary.aggregateRating.toFixed(1);
+            }
+            if (summary?.voteCount) {
+              const n = summary.voteCount;
+              imdbVotes = n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
+            }
+          }
+        } catch {
+          // Ignore GraphQL errors
+        }
+
+        const knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) || this.kpIdByTitle.get(cleanTitle.toLowerCase());
+        let kpData: FilmRatings | null = null;
+        if (knownKpId) {
+          kpData = await this.fetchRatingsByKpId(knownKpId, `${cleanTitle.toLowerCase()}:${year ?? ''}`);
+        }
+
+        return {
+          kp: kpData?.kp,
+          kpVotes: kpData?.kpVotes,
+          kpReviewsUrl: kpData?.kpReviewsUrl,
+          kpNotFormed: kpData?.kpNotFormed,
+          imdb: imdbScore || kpData?.imdb,
+          imdbVotes: imdbVotes || kpData?.imdbVotes,
+          imdbReviewsUrl: `https://www.imdb.com/title/${imdbId}/reviews/`,
+          country: kpData?.country
+        };
+      }
+      return null;
     } catch {
-      this.ratingsCache.set(cacheKey, null);
       return null;
     }
   }
@@ -167,14 +337,20 @@ export class PosterService {
       const imdbRaw = imdbMatch?.[2];
       const kpNum = kpRaw ? parseFloat(kpRaw) : 0;
       const imdbNum = imdbRaw ? parseFloat(imdbRaw) : 0;
+      const kpVotesRaw = kpMatch?.[1];
+      const kpVotesNum = kpVotesRaw ? parseInt(kpVotesRaw, 10) : 0;
+
+      // When KP rating is 0 but votes exist (e.g. reality show "Звёзды в джунглях"), rating is not formed yet
+      const isKpNotFormed = kpNum === 0 && kpVotesNum > 0;
 
       const kpReviewsUrl = kinopoiskId ? `https://www.kinopoisk.ru/film/${kinopoiskId}/reviews/` : undefined;
       const imdbReviewsUrl = pageData.imdbId ? `https://www.imdb.com/title/${pageData.imdbId}/reviews/` : undefined;
 
       const ratings: FilmRatings = {
-        kp: kpNum > 0 ? kpNum.toFixed(1) : undefined,
+        kp: kpNum > 0 ? kpNum.toFixed(1) : (isKpNotFormed ? 'Не сформирован' : undefined),
         kpVotes: formatVotes(kpMatch?.[1]),
         kpReviewsUrl,
+        kpNotFormed: isKpNotFormed ? true : undefined,
         imdb: imdbNum > 0 ? imdbNum.toFixed(1) : undefined,
         imdbVotes: formatVotes(imdbMatch?.[1]),
         imdbReviewsUrl,
@@ -202,6 +378,25 @@ export class PosterService {
     if (this.cache.has(cacheKey)) {
       return this.cache.get(cacheKey) ?? null;
     }
+
+    // Check shared title cache: if another release card with same title & year already extracted/found a poster!
+    if (cleanTitle) {
+      const titleKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
+      const titleKeyNoType = `${cleanTitle.toLowerCase()}:${year ?? ''}:`;
+      let cachedTitlePoster = this.titlePosterCache.get(titleKey) || this.titlePosterCache.get(titleKeyNoType);
+
+      // For TV series/shows or unversioned titles, share posters across seasons/years
+      if (!cachedTitlePoster && (contentType === 'series' || contentType === 'reality' || !year)) {
+        const seriesKey = `${cleanTitle.toLowerCase()}::${contentType || 'series'}`;
+        cachedTitlePoster = this.titlePosterCache.get(seriesKey) || this.titlePosterCache.get(`${cleanTitle.toLowerCase()}::reality`);
+      }
+
+      if (cachedTitlePoster) {
+        this.cache.set(cacheKey, cachedTitlePoster);
+        return cachedTitlePoster;
+      }
+    }
+
     if (this.posterPromises.has(cacheKey)) {
       return this.posterPromises.get(cacheKey)!;
     }
@@ -219,12 +414,26 @@ export class PosterService {
     cacheKey: string
   ): Promise<string | null> {
     try {
+      const storePoster = (url: string | null) => {
+        this.cache.set(cacheKey, url);
+        if (url && cleanTitle) {
+          const titleKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
+          this.titlePosterCache.set(titleKey, url);
+          const titleKeyNoType = `${cleanTitle.toLowerCase()}:${year ?? ''}:`;
+          this.titlePosterCache.set(titleKeyNoType, url);
+          if (contentType === 'series' || contentType === 'reality') {
+            this.titlePosterCache.set(`${cleanTitle.toLowerCase()}::${contentType}`, url);
+            this.titlePosterCache.set(`${cleanTitle.toLowerCase()}::series`, url);
+          }
+        }
+        return url;
+      };
+
       // 1. First priority: fast catalog search by title & year & contentType (instant 50-80ms CDN poster)
       if (cleanTitle) {
         const catalogPoster = await this.getOrSearchCatalog(cleanTitle, year, contentType);
         if (catalogPoster) {
-          this.cache.set(cacheKey, catalogPoster);
-          return catalogPoster;
+          return storePoster(catalogPoster);
         }
       }
 
@@ -233,8 +442,7 @@ export class PosterService {
         const slugMatch = pageUrl.match(/\/films\/([^#?\/]+)/);
         if (slugMatch) {
           const url = `https://torrentkino.org/images/posters/${slugMatch[1]}.webp`;
-          this.cache.set(cacheKey, url);
-          return url;
+          return storePoster(url);
         }
       }
 
@@ -243,18 +451,63 @@ export class PosterService {
         try {
           const pagePoster = await this.extractPosterFromPage(pageUrl);
           if (pagePoster) {
-            this.cache.set(cacheKey, pagePoster);
-            return pagePoster;
+            return storePoster(pagePoster);
           }
         } catch {
           // Ignore
         }
       }
 
-      this.cache.set(cacheKey, null);
-      return null;
+      // 4. Fallback: query IMDb Suggestion API to find official poster
+      if (cleanTitle) {
+        const imdbPoster = await this.fetchImdbPoster(cleanTitle, year);
+        if (imdbPoster) {
+          return storePoster(imdbPoster);
+        }
+      }
+
+      return storePoster(null);
     } finally {
       this.posterPromises.delete(cacheKey);
+    }
+  }
+
+  private async fetchImdbPoster(cleanTitle: string, year?: number): Promise<string | null> {
+    try {
+      const suggestUrl = `https://v3.sg.media-imdb.com/suggestion/x/${encodeURIComponent(cleanTitle)}.json`;
+      const res = await fetch(suggestUrl, {
+        headers: { 'User-Agent': APP_USER_AGENT },
+        signal: AbortSignal.timeout(3000)
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        d?: Array<{
+          id?: string;
+          l?: string;
+          y?: number;
+          i?: { imageUrl?: string };
+        }>;
+      };
+      if (!Array.isArray(data.d) || data.d.length === 0) return null;
+
+      let match = data.d.find((item) => {
+        if (!item.id || !item.l || !item.i?.imageUrl) return false;
+        if (!titlesMatch(cleanTitle, item.l)) return false;
+        if (year && item.y && Math.abs(item.y - year) > 1) return false;
+        return true;
+      });
+      if (!match) {
+        match = data.d.find((item) => item.id && item.l && item.i?.imageUrl && titlesMatch(cleanTitle, item.l));
+      }
+
+      const rawImg = match?.i?.imageUrl;
+      if (rawImg) {
+        // Optimize Amazon image size for UI card: request standard 380x562 thumbnail
+        return rawImg.replace(/(\._V1_).*(\.jpg)$/, '$1_QL75_UX380_CR0,0,380,562_$2');
+      }
+      return null;
+    } catch {
+      return null;
     }
   }
 
@@ -300,6 +553,9 @@ export class PosterService {
     try {
       if (pageUrl.includes('rutracker.org') && this.ruTrackerPageLoader) {
         html = await this.ruTrackerPageLoader(pageUrl, controller.signal);
+      } else if (pageUrl.includes('nnmclub') || pageUrl.includes('megapeer') || pageUrl.includes('rutor')) {
+        const encoding = pageUrl.includes('megapeer') || pageUrl.includes('nnmclub') ? 'win1251' : 'utf8';
+        html = await fetchPage(pageUrl, controller.signal, encoding);
       } else {
         const res = await fetch(pageUrl, {
           signal: controller.signal,
@@ -353,8 +609,8 @@ export class PosterService {
         const fullTag = tag[0];
         const urlMatch = fullTag.match(/\b(?:title|src)=['"]([^'"]+)['"]/i);
         if (urlMatch && urlMatch[1].startsWith('http')) {
-          const url = urlMatch[1];
-          if (!/icon|button|counter|flag|avatar|smilies/i.test(url)) {
+          const url = unwrapImageUrl(urlMatch[1]);
+          if (!/icon|button|counter|flag|avatar|smilies/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
             return url;
           }
         }
@@ -362,8 +618,11 @@ export class PosterService {
 
       // Fallback: any content image inside post_body
       const anyImg = content.match(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/i);
-      if (anyImg && anyImg[1].startsWith('http') && !/avatar|flag|icon|smilies/i.test(anyImg[1])) {
-        return anyImg[1];
+      if (anyImg && anyImg[1].startsWith('http')) {
+        const url = unwrapImageUrl(anyImg[1]);
+        if (!/avatar|flag|icon|smilies/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
+          return url;
+        }
       }
     }
 
@@ -372,7 +631,10 @@ export class PosterService {
       const descrMatch = html.match(/id=["']descr["'][^>]*>([\s\S]*?)<\/td>/i);
       const content = descrMatch ? descrMatch[1] : html;
       const imgMatch = content.match(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/i);
-      if (imgMatch && imgMatch[1].startsWith('http')) return imgMatch[1];
+      if (imgMatch && imgMatch[1].startsWith('http')) {
+        const url = unwrapImageUrl(imgMatch[1]);
+        if (!isDeadOrBlockedImageUrl(url)) return url;
+      }
     }
 
     // RuTor: first image inside #details (excluding icons)
@@ -380,8 +642,11 @@ export class PosterService {
       const detailsMatch = html.match(/id=["']details["'][^>]*>([\s\S]*?)<\/table>/i);
       const content = detailsMatch ? detailsMatch[1] : html;
       const imgMatch = content.match(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/i);
-      if (imgMatch && !imgMatch[1].includes('s.rutor.info') && imgMatch[1].startsWith('http')) {
-        return imgMatch[1];
+      if (imgMatch && imgMatch[1].startsWith('http')) {
+        const url = unwrapImageUrl(imgMatch[1]);
+        if (!url.includes('s.rutor.info') && !isDeadOrBlockedImageUrl(url)) {
+          return url;
+        }
       }
     }
 
@@ -396,8 +661,8 @@ export class PosterService {
         const fullTag = tag[0];
         const urlMatch = fullTag.match(/\b(?:title|src)=['"]([^'"]+)['"]/i);
         if (urlMatch && urlMatch[1].startsWith('http')) {
-          const url = urlMatch[1];
-          if (!/icon|button|counter|flag|avatar|smilies|rss|spacer|rating/i.test(url)) {
+          const url = unwrapImageUrl(urlMatch[1]);
+          if (!/icon|button|counter|flag|avatar|smilies|rss|spacer|rating/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
             return url;
           }
         }
@@ -405,23 +670,29 @@ export class PosterService {
 
       // 2. Check og:image meta tag
       const ogMatch = html.match(/<meta[^>]+property=['"]og:image['"][^>]+content=['"]([^'"]+)['"]/i);
-      if (ogMatch && ogMatch[1].startsWith('http') && !/logo|icon|rss/i.test(ogMatch[1])) {
-        return ogMatch[1];
+      if (ogMatch && ogMatch[1].startsWith('http')) {
+        const url = unwrapImageUrl(ogMatch[1]);
+        if (!/logo|icon|rss/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
+          return url;
+        }
       }
 
       // 3. Fallback: first content image inside postbody
       const anyImg = content.match(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/i);
-      if (anyImg && anyImg[1].startsWith('http') && !/avatar|flag|icon|smilies|rss|spacer/i.test(anyImg[1])) {
-        return anyImg[1];
+      if (anyImg && anyImg[1].startsWith('http')) {
+        const url = unwrapImageUrl(anyImg[1]);
+        if (!/avatar|flag|icon|smilies|rss|spacer/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
+          return url;
+        }
       }
     }
 
     // Generic fallback: search for first content image (ignoring logos, buttons, counters, ratings, rss, spacers)
     const allImages = [...html.matchAll(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/gi)];
     for (const m of allImages) {
-      const src = m[1];
+      const src = unwrapImageUrl(m[1]);
       if (/logo|icon|button|banner|rating|counter|smilies|avatars|tracker|download|rss|spacer|cub\d+|templates|flags|platinum|magnet/i.test(src)) continue;
-      if (src.startsWith('http')) return src;
+      if (src.startsWith('http') && !isDeadOrBlockedImageUrl(src)) return src;
     }
 
     return null;

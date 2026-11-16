@@ -1779,7 +1779,12 @@ function TorrentDetailModal({
 
         <div className="tv-detail-left">
           {posterUrl ? (
-            <img src={posterUrl} alt={item.title} className="tv-detail-poster" />
+            <img
+              src={posterUrl}
+              alt={item.title}
+              className="tv-detail-poster"
+              onError={() => setPosterUrl(null)}
+            />
           ) : (
             <div className="tv-detail-poster-fallback">
               <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -1844,8 +1849,11 @@ function TorrentDetailModal({
               </div>
               <div className="tv-rating-score-row">
                 <div className="tv-rating-score-left">
-                  <span className="tv-rating-star kp">★</span>
-                  <span className={`tv-rating-num ${parseFloat(ratings?.kp || '0') >= 7 ? 'good' : ''}`}>
+                  {ratings?.kpNotFormed ? null : <span className="tv-rating-star kp">★</span>}
+                  <span
+                    className={`tv-rating-num ${ratings?.kpNotFormed ? 'not-formed' : parseFloat(ratings?.kp || '0') >= 7 ? 'good' : ''}`}
+                    title={ratings?.kpNotFormed ? 'Рейтинг на Кинопоиске ещё не сформирован' : undefined}
+                  >
                     {ratingsLoading ? '…' : (ratings?.kp || '—')}
                   </span>
                 </div>
