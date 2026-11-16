@@ -112,7 +112,7 @@ describe('PosterService extraction', () => {
         </div>
       `;
     });
-    const url = await service.resolvePoster('Звёзды в джунглях', 2026, 'https://rutracker.org/forum/viewtopic.php?t=6919959');
+    const url = await service.resolvePoster('Локальное шоу редкий релиз', 2026, 'https://rutracker.org/forum/viewtopic.php?t=6919959');
     expect(url).toBe('https://i126.fastpic.org/big/2025/0929/47/2f0e7293c9dded242de4b5cf2e902347.jpg');
   });
 

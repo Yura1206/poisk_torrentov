@@ -446,7 +446,15 @@ export class PosterService {
         }
       }
 
-      // 3. Fallback: extract poster directly from the torrent release page (for TV shows, rare items)
+      // 3. High quality official poster from IMDb (fast 50-100ms, highly reliable CDN, never expires or returns 404)
+      if (cleanTitle) {
+        const imdbPoster = await this.fetchImdbPoster(cleanTitle, year);
+        if (imdbPoster) {
+          return storePoster(imdbPoster);
+        }
+      }
+
+      // 4. Fallback: extract poster directly from the torrent release page (for TV shows, rare items not on IMDb)
       if (pageUrl && pageUrl.startsWith('http')) {
         try {
           const pagePoster = await this.extractPosterFromPage(pageUrl);
@@ -455,14 +463,6 @@ export class PosterService {
           }
         } catch {
           // Ignore
-        }
-      }
-
-      // 4. Fallback: query IMDb Suggestion API to find official poster
-      if (cleanTitle) {
-        const imdbPoster = await this.fetchImdbPoster(cleanTitle, year);
-        if (imdbPoster) {
-          return storePoster(imdbPoster);
         }
       }
 
