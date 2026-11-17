@@ -29,14 +29,20 @@ function cleanTitleForSearch(title: string): string {
   // 3. Remove parentheses and bracket contents
   t = t.replace(/[\(\[\{].*?[\)\]\}]/g, ' ');
 
-  // 4. Remove punctuation
+  // 4. Normalize Russian letter 'ё' to 'е'
+  t = t.replace(/ё/gi, 'е');
+
+  // 5. Remove punctuation
   t = t.replace(/[^\p{L}\p{N}\s]/gu, ' ');
 
   return t.replace(/\s+/g, ' ').trim();
 }
 
 function normalizeTitle(s: string): string {
-  return (s || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  return (s || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]/gu, '');
 }
 
 const TMDB_API_KEY = '4ef0d7355d9ffb5151e987764708ce96';
@@ -158,8 +164,8 @@ export function titlesMatch(target: string, candidate: string, candidateOriginal
     if (normTarget.startsWith(normCand) || normCand.startsWith(normTarget)) return true;
   }
 
-  const targetWords = target.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
-  const candWords = candidate.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  const targetWords = cleanTitleForSearch(target).toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  const candWords = cleanTitleForSearch(candidate).toLowerCase().split(/\s+/).filter((w) => w.length > 1);
 
   if (targetWords.length === 0 || candWords.length === 0) return false;
 
@@ -617,14 +623,15 @@ export class PosterService {
 
     // Check shared title cache: if another release card with same title & year already extracted/found a poster!
     if (cleanTitle) {
-      const titleKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
-      const titleKeyNoType = `${cleanTitle.toLowerCase()}:${year ?? ''}:`;
+      const normKey = normalizeTitle(cleanTitle);
+      const titleKey = `${normKey}:${year ?? ''}:${contentType ?? ''}`;
+      const titleKeyNoType = `${normKey}:${year ?? ''}:`;
       let cachedTitlePoster = this.titlePosterCache.get(titleKey) || this.titlePosterCache.get(titleKeyNoType);
 
       // For TV series/shows or unversioned titles, share posters across seasons/years
       if (!cachedTitlePoster && (contentType === 'series' || contentType === 'reality' || !year)) {
-        const seriesKey = `${cleanTitle.toLowerCase()}::${contentType || 'series'}`;
-        cachedTitlePoster = this.titlePosterCache.get(seriesKey) || this.titlePosterCache.get(`${cleanTitle.toLowerCase()}::reality`);
+        const seriesKey = `${normKey}::${contentType || 'series'}`;
+        cachedTitlePoster = this.titlePosterCache.get(seriesKey) || this.titlePosterCache.get(`${normKey}::reality`);
       }
 
       if (cachedTitlePoster) {
@@ -637,7 +644,7 @@ export class PosterService {
       return this.posterPromises.get(cacheKey)!;
     }
 
-    const promise = this.resolvePosterInternal(cleanTitle, year, pageUrl, contentType, cacheKey);
+    const promise = this.resolvePosterInternal(cleanTitle, year, pageUrl, contentType, cacheKey, title);
     this.posterPromises.set(cacheKey, promise);
     return promise;
   }
@@ -647,19 +654,21 @@ export class PosterService {
     year: number | undefined,
     pageUrl: string | undefined,
     contentType: string | undefined,
-    cacheKey: string
+    cacheKey: string,
+    rawTitle?: string
   ): Promise<string | null> {
     try {
       const storePoster = (url: string | null) => {
         this.cache.set(cacheKey, url);
         if (url && cleanTitle) {
-          const titleKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
+          const normKey = normalizeTitle(cleanTitle);
+          const titleKey = `${normKey}:${year ?? ''}:${contentType ?? ''}`;
           this.titlePosterCache.set(titleKey, url);
-          const titleKeyNoType = `${cleanTitle.toLowerCase()}:${year ?? ''}:`;
+          const titleKeyNoType = `${normKey}:${year ?? ''}:`;
           this.titlePosterCache.set(titleKeyNoType, url);
           if (contentType === 'series' || contentType === 'reality') {
-            this.titlePosterCache.set(`${cleanTitle.toLowerCase()}::${contentType}`, url);
-            this.titlePosterCache.set(`${cleanTitle.toLowerCase()}::series`, url);
+            this.titlePosterCache.set(`${normKey}::${contentType}`, url);
+            this.titlePosterCache.set(`${normKey}::series`, url);
           }
         }
         return url;
@@ -684,7 +693,7 @@ export class PosterService {
 
       // 1. First priority: fast catalog search by title & year & contentType (instant 50-80ms CDN poster)
       if (cleanTitle) {
-        const catalogPoster = await this.getOrSearchCatalog(cleanTitle, year, contentType);
+        const catalogPoster = await this.getOrSearchCatalog(cleanTitle, year, contentType, rawTitle);
         if (catalogPoster) {
           return storePoster(catalogPoster);
         }
@@ -701,7 +710,7 @@ export class PosterService {
 
       // 3. TMDB API search (rich coverage for TV series, shows, anime, movies with Russian metadata)
       if (cleanTitle) {
-        const tmdbPoster = await this.fetchTmdbPoster(cleanTitle, year, contentType);
+        const tmdbPoster = await this.fetchTmdbPoster(cleanTitle, year, contentType, rawTitle);
         if (tmdbPoster) {
           return storePoster(tmdbPoster);
         }
@@ -733,7 +742,7 @@ export class PosterService {
     }
   }
 
-  private async fetchTmdbPoster(cleanTitle: string, year?: number, contentType?: string): Promise<string | null> {
+  private async fetchTmdbPoster(cleanTitle: string, year?: number, contentType?: string, rawTitle?: string): Promise<string | null> {
     try {
       const isTargetSeries = contentType === 'series' || contentType === 'reality';
       const isTargetMovie = contentType === 'movie';
@@ -742,6 +751,16 @@ export class PosterService {
       for (const [key, aliases] of Object.entries(TITLE_SEARCH_ALIASES)) {
         if (norm === normalizeTitle(key)) {
           queries.push(...aliases);
+        }
+      }
+
+      // Add main franchise prefix before colon or dash (e.g. "Трансформеры 3: Тёмная сторона Луны" -> "Трансформеры 3")
+      if (rawTitle) {
+        const subParts = rawTitle.split(/[:\-–—\.]+/).map((p) => cleanTitleForSearch(p)).filter((p) => p.length >= 3);
+        for (const sp of subParts) {
+          if (!queries.includes(sp)) {
+            queries.push(sp);
+          }
         }
       }
 
@@ -859,8 +878,9 @@ export class PosterService {
     }
   }
 
-  private async getOrSearchCatalog(cleanTitle: string, year?: number, contentType?: string): Promise<string | null> {
-    const catalogKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
+  private async getOrSearchCatalog(cleanTitle: string, year?: number, contentType?: string, rawTitle?: string): Promise<string | null> {
+    const normKey = normalizeTitle(cleanTitle);
+    const catalogKey = `${normKey}:${year ?? ''}:${contentType ?? ''}`;
     if (this.catalogCache.has(catalogKey)) {
       return this.catalogCache.get(catalogKey) ?? null;
     }
@@ -870,7 +890,16 @@ export class PosterService {
 
     const promise = (async () => {
       try {
-        const result = await this.searchCatalog(cleanTitle, year, contentType);
+        let result = await this.searchCatalog(cleanTitle, year, contentType);
+        if (!result && rawTitle) {
+          const subParts = rawTitle.split(/[:\-–—\.]+/).map((p) => cleanTitleForSearch(p)).filter((p) => p.length >= 3);
+          for (const sp of subParts) {
+            if (normalizeTitle(sp) !== normKey) {
+              result = await this.searchCatalog(sp, year, contentType);
+              if (result) break;
+            }
+          }
+        }
         this.catalogCache.set(catalogKey, result);
         return result;
       } catch {

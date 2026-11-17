@@ -156,7 +156,7 @@ describe('PosterService extraction', () => {
     // Since megapeer 999 doesn't really exist, it should fallback to IMDb or if simulated:
     // Let's test explicit title sharing:
     // @ts-expect-error test private cache
-    service.titlePosterCache.set('звёзды в джунглях:2024:', 'https://cdn.example.com/stars_poster.jpg');
+    service.titlePosterCache.set('звездывджунглях:2024:', 'https://cdn.example.com/stars_poster.jpg');
 
     // 2. Second card (e.g. RuTracker or NNM) requests poster for same title
     const card2Poster = await service.resolvePoster(
@@ -248,5 +248,14 @@ describe('PosterService extraction', () => {
     expect(poster).not.toContain('vikingi-1958');
     expect(poster).not.toContain('vikingi-2014');
     expect(poster).toContain('1de3R902B5EEMmohBQsExd5V87Y');
+  });
+
+  it('resolves poster for Transformers 3 with both ё and е seamlessly', async () => {
+    const service = new PosterService();
+    const posterYo = await service.resolvePoster('Трансформеры 3: Тёмная сторона Луны', 2011, undefined, 'movie');
+    const posterYe = await service.resolvePoster('Трансформеры 3: Темная сторона Луны', 2011, undefined, 'movie');
+    expect(posterYo).toBeDefined();
+    expect(posterYe).toBeDefined();
+    expect(posterYe).toBe(posterYo);
   });
 });
