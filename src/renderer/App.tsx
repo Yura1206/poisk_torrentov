@@ -14,6 +14,8 @@ const resolutionLabels: Record<Resolution, string> = {
 };
 const rangeLabels: Record<DynamicRange, string> = { sdr: 'SDR', hdr: 'HDR', hdr10: 'HDR', hdr10plus: 'HDR', 'dolby-vision': 'Dolby Vision', unknown: 'Не указано' };
 const contentLabels: Record<ContentType, string> = { all: 'Всё', movie: 'Фильм', series: 'Сериал', reality: 'Реалити-шоу' };
+const contentTypeFilterValues: Array<Exclude<ContentType, 'all'>> = ['movie', 'series', 'reality'];
+const contentTypeFilterLabels: Record<Exclude<ContentType, 'all'>, string> = { movie: 'Фильм', series: 'Сериал', reality: 'Шоу' };
 const initialSort: SortState = { field: 'relevance', direction: 'desc' };
 const PAGE_SIZE = 48;
 const globalRatingsCache = new Map<string, FilmRatings | null>();
@@ -405,7 +407,11 @@ export default function App() {
 
   const relevantResultsForSeasons = useMemo(() => {
     const activeYears = filters.years;
+    const activeContentTypes = filters.contentTypes;
     return results.filter((item) => {
+      if (activeContentTypes && activeContentTypes.length > 0) {
+        if (!activeContentTypes.includes(item.contentType as any)) return false;
+      }
       if (activeYears && activeYears.length > 0) {
         const itemYears = item.years && item.years.length > 0 ? item.years : (item.year ? [item.year] : []);
         if (!itemYears.some((y) => activeYears.includes(y))) return false;
@@ -414,7 +420,7 @@ export default function App() {
       if (filters.resolutions.length && !filters.resolutions.includes(item.resolution)) return false;
       return true;
     });
-  }, [results, filters.years, filters.providers, filters.resolutions]);
+  }, [results, filters.contentTypes, filters.years, filters.providers, filters.resolutions]);
 
   const hasSeriesInActiveView = useMemo(() => {
     return relevantResultsForSeasons.some((item) => item.contentType === 'series' || item.contentType === 'reality');
@@ -446,7 +452,11 @@ export default function App() {
 
   const relevantResultsForYears = useMemo(() => {
     const activeSeasons = filters.seasons;
+    const activeContentTypes = filters.contentTypes;
     return results.filter((item) => {
+      if (activeContentTypes && activeContentTypes.length > 0) {
+        if (!activeContentTypes.includes(item.contentType as any)) return false;
+      }
       if (activeSeasons && activeSeasons.length > 0) {
         const itemSeasons = item.seasons && item.seasons.length > 0 ? item.seasons : (item.season ? [item.season] : []);
         if (!itemSeasons.some((s) => activeSeasons.includes(s))) return false;
@@ -455,7 +465,7 @@ export default function App() {
       if (filters.resolutions.length && !filters.resolutions.includes(item.resolution)) return false;
       return true;
     });
-  }, [results, filters.seasons, filters.providers, filters.resolutions]);
+  }, [results, filters.contentTypes, filters.seasons, filters.providers, filters.resolutions]);
 
   const yearsList = useMemo(() => {
     return uniqueNumbers(
@@ -469,6 +479,16 @@ export default function App() {
       updateFilter('seasons', []);
     }
   }, [hasSeriesInActiveView, filters.seasons]);
+
+  useEffect(() => {
+    if (filters.years?.length && yearsList.length > 0) {
+      if (!filters.years.some((y) => yearsList.includes(y))) {
+        updateFilter('years', []);
+      }
+    } else if (filters.years?.length && yearsList.length === 0) {
+      updateFilter('years', []);
+    }
+  }, [yearsList, filters.years]);
 
   const facets = useMemo(() => ({
     seasons: seasonsList,
@@ -1121,15 +1141,28 @@ export default function App() {
       <div className="sticky-controls">
         <section className="filter-panel">
           <div className="filter-groups-left">
+            <FilterGroup
+              title="Тип контента"
+              values={contentTypeFilterValues}
+              labels={contentTypeFilterLabels}
+              active={filters.contentTypes ?? []}
+              onToggle={(value) => {
+                const current = filters.contentTypes ?? [];
+                const next = current.includes(value) ? [] : [value];
+                updateFilter('contentTypes', next);
+                if (next.includes('movie')) {
+                  updateFilter('seasons', []);
+                }
+              }}
+            />
             <FilterGroup title="Разрешение видео" values={(['480p', '720p', '1080p', '2160p'] as Resolution[])} labels={resolutionLabels} active={filters.resolutions} onToggle={(value) => updateFilter('resolutions', filters.resolutions.includes(value) ? [] : [value])} />
             <FilterGroup title="Динамический диапазон" values={(['sdr', 'hdr', 'dolby-vision'] as DynamicRange[])} labels={rangeLabels} active={filters.dynamicRanges} onToggle={(value) => updateFilter('dynamicRanges', filters.dynamicRanges.includes(value) ? [] : [value])} />
             {availableProviders.length > 0 && (
-              <FilterGroup
-                title="Источник"
-                values={availableProviders.map((p) => p.id)}
+              <ProviderDropdown
+                providers={availableProviders}
+                activeProvider={filters.providers?.[0]}
                 labels={providerLabels}
-                active={filters.providers ?? []}
-                onToggle={(value) => updateFilter('providers', (filters.providers ?? []).includes(value) ? [] : [value])}
+                onSelect={(providerId) => updateFilter('providers', providerId ? [providerId] : [])}
               />
             )}
             {facets.years.length > 0 && (
@@ -1560,6 +1593,84 @@ function SeasonDropdown({
   );
 }
 
+function ProviderDropdown({
+  providers,
+  activeProvider,
+  labels,
+  onSelect
+}: {
+  providers: Array<{ id: string; name: string }>;
+  activeProvider?: string;
+  labels: Record<string, string>;
+  onSelect(providerId?: string): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="year-dropdown-wrap" ref={containerRef}>
+      <span className="filter-label">Источник</span>
+      <button
+        type="button"
+        className={`chip dropdown-trigger ${activeProvider ? 'active' : ''}`}
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Выбрать источник из выпадающего списка"
+      >
+        <span>{activeProvider ? (labels[activeProvider] || activeProvider) : 'Все'}</span>
+        <span className="dropdown-arrow">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="year-dropdown-menu" role="listbox">
+          <button
+            type="button"
+            className={`year-dropdown-item ${!activeProvider ? 'selected' : ''}`}
+            onClick={() => {
+              onSelect(undefined);
+              setOpen(false);
+            }}
+          >
+            Все источники
+          </button>
+          {providers.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`year-dropdown-item ${activeProvider === p.id ? 'selected' : ''}`}
+              onClick={() => {
+                onSelect(activeProvider === p.id ? undefined : p.id);
+                setOpen(false);
+              }}
+            >
+              {p.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FilterGroup<T extends string | number>({ title, values, labels, active, onToggle }: { title: string; values: T[]; labels: Record<string | number, string>; active: T[]; onToggle(value: T): void }) {
   return <div className="filter-group"><span className="filter-label">{title}</span>{values.map((value) => <button type="button" className={active.includes(value) ? 'chip active' : 'chip'} onClick={() => onToggle(value)} key={value}>{labels[value]}</button>)}</div>;
 }
@@ -1576,6 +1687,7 @@ function ActiveFilters({
   onReset(): void;
 }) {
   const current: Array<[keyof FilterState, string]> = [
+    ['contentTypes', (filters.contentTypes ?? []).map((ct) => contentTypeFilterLabels[ct] || ct).join(', ')],
     ['resolutions', filters.resolutions.join(', ')],
     ['dynamicRanges', filters.dynamicRanges.map((range) => rangeLabels[range]).join(', ')],
     ['providers', (filters.providers ?? []).map((p) => providerLabels[p] || p).join(', ')],

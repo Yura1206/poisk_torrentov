@@ -114,6 +114,7 @@ export interface FilterState {
   language: 'confirmed' | 'all';
   providers?: string[];
   years?: number[];
+  contentTypes?: Array<Exclude<ContentType, 'all'>>;
 }
 
 export type SortField = 'relevance' | 'title' | 'seeds' | 'size' | 'published' | 'updated';

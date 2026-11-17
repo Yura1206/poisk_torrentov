@@ -17,12 +17,14 @@ export const emptyFilters = (): FilterState => ({
   studios: [],
   language: 'all',
   providers: [],
-  years: []
+  years: [],
+  contentTypes: []
 });
 
 export function filterResults(results: TorrentResult[], filters: FilterState): TorrentResult[] {
   return results.filter((item) => {
     const hdrMatches = filters.dynamicRanges.includes('hdr') && ['hdr', 'hdr10', 'hdr10plus'].includes(item.dynamicRange);
+    const contentTypeMatches = !filters.contentTypes?.length || filters.contentTypes.includes(item.contentType);
     const itemYears = item.years?.length ? item.years : (item.year !== undefined ? [item.year] : []);
     const itemSeasons = item.seasons?.length ? item.seasons : (item.season !== undefined ? [item.season] : []);
 
@@ -47,6 +49,7 @@ export function filterResults(results: TorrentResult[], filters: FilterState): T
     return (!filters.resolutions.length || filters.resolutions.includes(item.resolution))
       && (!filters.dynamicRanges.length || filters.dynamicRanges.includes(item.dynamicRange) || hdrMatches)
       && (!filters.providers?.length || filters.providers.includes(item.providerId))
+      && contentTypeMatches
       && (!filters.years?.length || filters.years.some((y) => itemYears.includes(y)))
       && seasonMatches
       && (!filters.parts.length || (item.part !== undefined && filters.parts.includes(item.part)))

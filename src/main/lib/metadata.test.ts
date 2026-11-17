@@ -122,6 +122,13 @@ describe('фильтрация и сортировка', () => {
     const filters = { ...emptyFilters(), providers: ['nnmclub'] };
     expect(filterResults([film, series], filters).map((item) => item.id)).toEqual(['nnm:1']);
   });
+  it('фильтрует результаты по типу контента (фильм, сериал, шоу)', () => {
+    const reality = base({ id: 'rutracker:1', contentType: 'reality', title: 'Шоу Звёзды в джунглях' });
+    const items = [film, series, reality];
+    expect(filterResults(items, { ...emptyFilters(), contentTypes: ['movie'] }).map((i) => i.id)).toEqual(['rutor:1']);
+    expect(filterResults(items, { ...emptyFilters(), contentTypes: ['series'] }).map((i) => i.id)).toEqual(['nnm:1']);
+    expect(filterResults(items, { ...emptyFilters(), contentTypes: ['reality'] }).map((i) => i.id)).toEqual(['rutracker:1']);
+  });
   it('фильтрует результаты по выбранному году выхода', () => {
     const filters = { ...emptyFilters(), years: [2014] };
     expect(filterResults([film, unknown], filters).map((item) => item.id)).toEqual(['rutor:1']);
