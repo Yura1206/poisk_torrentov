@@ -53,6 +53,27 @@ function normalizeSpeechResult(text: string): string {
   return cleaned;
 }
 
+export function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[m][n];
+}
+
 export function cleanSuggestionSuffixes(s: string): string {
   let res = s || '';
   // Strip trailing search junk (смотреть онлайн, актеры, и т.д.)
@@ -76,29 +97,75 @@ export function hasActualCorrection(original: string, candidate: string): boolea
   const origWords = normOriginal.split(/\s+/).filter(Boolean);
   const candWords = normCandidate.split(/\s+/).filter(Boolean);
 
-  // If candidate cleaned of seasons/series/years is identical to original, it's not a correction
+  // Candidate must have exactly the same number of words (must NOT add new words, seasons, series, phrases)
+  if (origWords.length !== candWords.length) {
+    return false;
+  }
+
+  // Candidate stripped of suffixes must match
   const cleanCand = cleanSuggestionSuffixes(candidate).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
   const cleanOrig = cleanSuggestionSuffixes(original).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
   if (cleanCand === cleanOrig || cleanCand === normOriginal) {
     return false;
   }
 
-  // If every word in original is already present in candidate without any spelling change,
-  // then candidate is just adding words (season, year, part, etc.), NOT fixing a typo!
-  const allOriginalWordsInCandidate = origWords.every((ow) => candWords.includes(ow));
-  if (allOriginalWordsInCandidate) {
-    return false;
+  // Check each word: it must either match exactly or be a close typo correction (distance <= 2)
+  let typoFound = false;
+  for (let i = 0; i < origWords.length; i++) {
+    const ow = origWords[i];
+    const cw = candWords[i];
+    if (ow === cw) continue;
+
+    const dist = levenshteinDistance(ow, cw);
+    const maxAllowedDist = ow.length > 5 ? 2 : 1;
+    if (dist <= maxAllowedDist) {
+      typoFound = true;
+    } else {
+      // Word completely changed or unrelated
+      return false;
+    }
   }
 
-  return true;
+  return typoFound;
 }
 
 export async function autoCorrectTitle(text: string): Promise<string> {
   if (!text || text.trim().length < 2) return text;
   const original = text.trim();
-  let query = original;
 
-  // 1. Google Suggest (full phrase entity & movie title recognition)
+  // 1. First, check Yandex Speller. If words are spelled correctly, return original immediately!
+  try {
+    const url = 'https://speller.yandex.net/services/spellservice.json/checkText?lang=ru,en&text=' + encodeURIComponent(original);
+    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) {
+      const items = await res.json() as Array<{ word: string; s: string[] }>;
+      if (Array.isArray(items)) {
+        // If Yandex Speller says NO errors, the input text has NO typos! Do not suggest anything!
+        if (items.length === 0) {
+          return original;
+        }
+
+        let corrected = original;
+        for (const item of items) {
+          if (item.word && item.s && item.s[0]) {
+            const regex = new RegExp(`\\b${item.word}\\b`, 'gi');
+            corrected = corrected.replace(regex, item.s[0]);
+          }
+        }
+        corrected = corrected.replace(/^[.,!?:;\-–—\s]+|[.,!?:;\-–—\s]+$/g, '').trim();
+        if (corrected.length > 0) {
+          corrected = corrected.charAt(0).toUpperCase() + corrected.slice(1);
+        }
+        if (hasActualCorrection(original, corrected)) {
+          return corrected;
+        }
+      }
+    }
+  } catch {
+    // ignore network timeout
+  }
+
+  // 2. Google Suggest: only if strict typo correction matches (exact word count, distance <= 2)
   try {
     const url = 'https://suggestqueries.google.com/complete/search?client=chrome&hl=ru&gl=ru&q=' + encodeURIComponent(original);
     const res = await fetch(url, {
@@ -114,8 +181,11 @@ export async function autoCorrectTitle(text: string): Promise<string> {
         const cleaned = cleanSuggestionSuffixes(rawSug);
         if (!cleaned || cleaned.length < 2) continue;
         if (hasActualCorrection(original, cleaned)) {
-          query = cleaned;
-          break;
+          let formatted = cleaned.replace(/^[.,!?:;\-–—\s]+|[.,!?:;\-–—\s]+$/g, '').trim();
+          if (formatted.length > 0) {
+            formatted = formatted.charAt(0).toUpperCase() + formatted.slice(1);
+          }
+          return formatted;
         }
       }
     }
@@ -123,41 +193,7 @@ export async function autoCorrectTitle(text: string): Promise<string> {
     // ignore network timeout
   }
 
-  // 2. Yandex Speller (word-by-word spelling corrections)
-  try {
-    const url = 'https://speller.yandex.net/services/spellservice.json/checkText?text=' + encodeURIComponent(query);
-    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-    if (res.ok) {
-      const items = await res.json() as Array<{ word: string; s: string[] }>;
-      if (Array.isArray(items) && items.length > 0) {
-        let corrected = query;
-        for (const item of items) {
-          if (item.word && item.s && item.s[0]) {
-            const regex = new RegExp(`\\b${item.word}\\b`, 'gi');
-            corrected = corrected.replace(regex, item.s[0]);
-          }
-        }
-        if (hasActualCorrection(original, corrected)) {
-          query = corrected;
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  // Final cleanup and capitalization
-  query = query.replace(/^[.,!?:;\-–—\s]+|[.,!?:;\-–—\s]+$/g, '').trim();
-  if (query.length > 0) {
-    query = query.charAt(0).toUpperCase() + query.slice(1);
-  }
-
-  // Only return query if it has an actual typo/word correction, otherwise keep original
-  if (!hasActualCorrection(original, query)) {
-    return original;
-  }
-
-  return query;
+  return original;
 }
 
 export async function transcribeAudio(

@@ -57,7 +57,11 @@ function formatReleaseSubline(
   let displayYear = item.year;
   let displaySeason = item.season;
 
-  if (activeYear && (item.contentType === 'series' || item.contentType === 'reality')) {
+  const minYear = item.years && item.years.length > 0 ? Math.min(...item.years) : item.year;
+  const maxYear = item.years && item.years.length > 0 ? Math.max(...item.years) : item.year;
+  const hasYearRange = minYear !== undefined && maxYear !== undefined && minYear !== maxYear;
+
+  if (activeYear) {
     displayYear = activeYear;
     const itemSeasons = item.seasons && item.seasons.length > 0 ? item.seasons : (item.season ? [item.season] : []);
     const itemYears = item.years && item.years.length > 0 ? item.years : (item.year ? [item.year] : []);
@@ -69,7 +73,16 @@ function formatReleaseSubline(
     }
   }
 
-  let text = displayYear ? `${typeWord} ${displayYear} года` : typeWord;
+  let yearPart = '';
+  if (activeYear && hasYearRange) {
+    yearPart = `${activeYear} года (${minYear}–${maxYear})`;
+  } else if (hasYearRange) {
+    yearPart = `${minYear}–${maxYear} годов`;
+  } else if (displayYear) {
+    yearPart = `${displayYear} года`;
+  }
+
+  let text = yearPart ? `${typeWord} ${yearPart}` : typeWord;
 
   if (displaySeason && (item.contentType === 'series' || item.contentType === 'reality')) {
     text += ` · Сезон ${displaySeason}`;
@@ -82,6 +95,27 @@ function formatReleaseSubline(
   return text;
 }
 
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[m][n];
+}
+
 function hasActualCorrection(original: string, candidate: string): boolean {
   const normOriginal = original.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
   const normCandidate = candidate.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
@@ -91,14 +125,27 @@ function hasActualCorrection(original: string, candidate: string): boolean {
   const origWords = normOriginal.split(/\s+/).filter(Boolean);
   const candWords = normCandidate.split(/\s+/).filter(Boolean);
 
-  // If candidate is just the original words plus extra words (e.g. season, year, episode),
-  // then NO typo was fixed! Never show this as an autocorrection!
-  const allOriginalWordsInCandidate = origWords.every((ow) => candWords.includes(ow));
-  if (allOriginalWordsInCandidate) {
+  // Must have identical number of words (never suggest adding words, seasons, series or years)
+  if (origWords.length !== candWords.length) {
     return false;
   }
 
-  return true;
+  let typoFound = false;
+  for (let i = 0; i < origWords.length; i++) {
+    const ow = origWords[i];
+    const cw = candWords[i];
+    if (ow === cw) continue;
+
+    const dist = levenshteinDistance(ow, cw);
+    const maxAllowedDist = ow.length > 5 ? 2 : 1;
+    if (dist <= maxAllowedDist) {
+      typoFound = true;
+    } else {
+      return false;
+    }
+  }
+
+  return typoFound;
 }
 
 export default function App() {
@@ -1906,7 +1953,12 @@ function TorrentDetailModal({
         <div className="tv-detail-right">
           <div className="tv-detail-meta-top">
             <span className="tv-badge-type">{contentLabels[item.contentType]}</span>
-            {item.year && <span className="tv-meta-dot">• {item.year}</span>}
+            {(() => {
+              const minYear = item.years && item.years.length > 0 ? Math.min(...item.years) : item.year;
+              const maxYear = item.years && item.years.length > 0 ? Math.max(...item.years) : item.year;
+              const rangeStr = minYear !== undefined && maxYear !== undefined && minYear !== maxYear ? `${minYear}–${maxYear}` : (item.year ? String(item.year) : null);
+              return rangeStr ? <span className="tv-meta-dot">• {rangeStr}</span> : null;
+            })()}
             {displayCountry && <span className="tv-meta-dot">• {displayCountry}</span>}
           </div>
 

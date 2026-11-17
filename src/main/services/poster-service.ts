@@ -199,6 +199,24 @@ function unwrapImageUrl(url: string): string {
   return url;
 }
 
+export function isBadgeOrRatingImageUrl(url: string, tagHtml?: string): boolean {
+  if (!url || typeof url !== 'string') return true;
+  const combined = `${url} ${tagHtml || ''}`.toLowerCase();
+
+  // Age ratings & restrictions: 0+, 6+, 12+, 16+, 18+, PG-13, R-rated, NC-17, etc.
+  if (/(?:^|[\W_])(?:0|6|12|16|18)\s*(?:\+|plus|let|лет|years)(?:[\W_]|$)/i.test(combined)) {
+    return true;
+  }
+  if (/(?:age[_\-]?rating|vozrast|pg[_\-]?13|mpaa|restriction|censorship)/i.test(combined)) {
+    return true;
+  }
+  // Badges, icons, buttons, counters, flags, avatars, smilies, spacers, audio/sub logos
+  if (/(?:icon|badge|button|counter|flag|avatar|smilies|spacer|banner_small|pixel|rating|subtitles)/i.test(combined)) {
+    return true;
+  }
+  return false;
+}
+
 export class PosterService {
   private cache = new Map<string, string | null>();
   private titlePosterCache = new Map<string, string | null>();
@@ -931,7 +949,7 @@ export class PosterService {
         const urlMatch = fullTag.match(/\b(?:title|src)=['"]([^'"]+)['"]/i);
         if (urlMatch && urlMatch[1].startsWith('http')) {
           const url = unwrapImageUrl(urlMatch[1]);
-          if (!/icon|button|counter|flag|avatar|smilies/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
+          if (!isBadgeOrRatingImageUrl(url, fullTag) && !isDeadOrBlockedImageUrl(url)) {
             return url;
           }
         }
@@ -941,7 +959,7 @@ export class PosterService {
       const anyImg = content.match(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/i);
       if (anyImg && anyImg[1].startsWith('http')) {
         const url = unwrapImageUrl(anyImg[1]);
-        if (!/avatar|flag|icon|smilies/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
+        if (!isBadgeOrRatingImageUrl(url, anyImg[0]) && !isDeadOrBlockedImageUrl(url)) {
           return url;
         }
       }
@@ -954,7 +972,7 @@ export class PosterService {
       const imgMatch = content.match(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/i);
       if (imgMatch && imgMatch[1].startsWith('http')) {
         const url = unwrapImageUrl(imgMatch[1]);
-        if (!isDeadOrBlockedImageUrl(url)) return url;
+        if (!isBadgeOrRatingImageUrl(url, imgMatch[0]) && !isDeadOrBlockedImageUrl(url)) return url;
       }
     }
 
@@ -965,7 +983,7 @@ export class PosterService {
       const imgMatch = content.match(/<img[^>]+src=['"]([^'"]+\.(?:jpg|jpeg|webp|png)(?:\?[^'"]*)?)['"]/i);
       if (imgMatch && imgMatch[1].startsWith('http')) {
         const url = unwrapImageUrl(imgMatch[1]);
-        if (!url.includes('s.rutor.info') && !isDeadOrBlockedImageUrl(url)) {
+        if (!url.includes('s.rutor.info') && !isBadgeOrRatingImageUrl(url, imgMatch[0]) && !isDeadOrBlockedImageUrl(url)) {
           return url;
         }
       }
@@ -983,7 +1001,7 @@ export class PosterService {
         const urlMatch = fullTag.match(/\b(?:title|src)=['"]([^'"]+)['"]/i);
         if (urlMatch && urlMatch[1].startsWith('http')) {
           const url = unwrapImageUrl(urlMatch[1]);
-          if (!/icon|button|counter|flag|avatar|smilies|rss|spacer|rating/i.test(url) && !isDeadOrBlockedImageUrl(url)) {
+          if (!isBadgeOrRatingImageUrl(url, fullTag) && !isDeadOrBlockedImageUrl(url)) {
             return url;
           }
         }

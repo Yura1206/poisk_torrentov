@@ -107,20 +107,81 @@ export function exactTitleMatches(query: string, item: { title: string; alternat
   return [item.title, ...item.alternativeTitles].some((title) => normaliseText(title) === wanted);
 }
 
+export function stemWord(word: string): string {
+  const w = word.toLowerCase().trim();
+  if (w.length < 4) return w;
+  return w
+    .replace(/(?:янин|яне|янам|янами|янах|янина|янину|янином|янине|тян|тяне|тянам|тянами|тянах)$/u, '')
+    .replace(/(?:иями|ями|ами|ого|его|ому|ему|ыми|ими|ях|ах|ой|ей|ий|ый|ов|ев|ей|ам|ям|ом|ем|а|я|у|ю|е|ы|и|о)$/u, '');
+}
+
 export function normalTitleMatches(query: string, item: { title: string; alternativeTitles: string[]; rawTitle: string }): boolean {
   const words = normaliseText(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   if (!words.length) return false;
-  const haystack = normaliseText([item.title, ...item.alternativeTitles, item.rawTitle].join(' '));
-  return words.every((word) => haystack.includes(word));
+
+  const normTitle = normaliseText(item.title);
+  const titleWords = normTitle.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const altWords = item.alternativeTitles.flatMap((alt) => normaliseText(alt).split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+  const hasCyrillicTitle = /[\u0400-\u04FF]/u.test(normTitle);
+
+  return words.every((word) => {
+    const isCyrillic = /[\u0400-\u04FF]/u.test(word);
+    const stem = stemWord(word);
+
+    // Direct check in main title words
+    const inTitle = titleWords.some((tw) => {
+      if (tw.includes(word)) return true;
+      if (stem.length >= 3 && (tw.startsWith(stem) || stemWord(tw) === stem)) return true;
+      return false;
+    });
+
+    if (inTitle) return true;
+
+    // If query word is in Cyrillic and the main title is already in Cyrillic,
+    // require it to match the main title (do not let random alternative/sub-titles bleed in)
+    if (isCyrillic && hasCyrillicTitle) {
+      return false;
+    }
+
+    // Otherwise check alternative titles (e.g. latin original title or missing Cyrillic primary title)
+    return altWords.some((aw) => {
+      if (aw.includes(word)) return true;
+      if (stem.length >= 3 && (aw.startsWith(stem) || stemWord(aw) === stem)) return true;
+      return false;
+    });
+  });
 }
 
 export function relevanceFor(query: string, title: string, alternatives: string[], rawTitle: string): number {
   const wanted = normaliseText(query);
-  const candidates = [title, ...alternatives].map(normaliseText);
-  if (candidates.includes(wanted)) return 1_000;
-  if (candidates.some((candidate) => candidate.startsWith(wanted))) return 800;
-  if (normaliseText(rawTitle).includes(wanted)) return 500;
-  return wanted.split(' ').filter((word) => normaliseText(rawTitle).includes(word)).length * 100;
+  const normTitle = normaliseText(title);
+  const normAlts = alternatives.map(normaliseText);
+
+  // Exact match on primary title is highest priority
+  if (normTitle === wanted) return 1_000;
+  // Primary title starts with query
+  if (normTitle.startsWith(wanted)) return 800;
+  // Primary title contains full query phrase
+  if (normTitle.includes(wanted)) return 700;
+
+  // Exact match on alternative titles
+  if (normAlts.includes(wanted)) return 400;
+  if (normAlts.some((alt) => alt.startsWith(wanted))) return 350;
+
+  // Words matching in primary title
+  const words = wanted.split(/\s+/).filter(Boolean);
+  const titleWordsMatched = words.filter((w) => normTitle.includes(w) || (w.length >= 4 && normTitle.includes(stemWord(w)))).length;
+  if (titleWordsMatched > 0) {
+    return 500 + titleWordsMatched * 50;
+  }
+
+  // Words matching in alternative titles
+  const altWordsMatched = words.filter((w) => normAlts.some((a) => a.includes(w))).length;
+  if (altWordsMatched > 0) {
+    return 100 + altWordsMatched * 20;
+  }
+
+  return 0;
 }
 
 export function extractResolution(
@@ -750,7 +811,7 @@ export function isVideoRelease(rawTitle: string, category?: string): boolean {
 
 export function detectContentType(value: string): Exclude<ContentType, 'all'> {
   if (/реалити|reality\s*show|шоу\b/iu.test(value)) return 'reality';
-  if (/(?:\bS\d{1,2}\b|сезон|с\.\d{1,2}\b|серии|эпизод|season)/iu.test(value)) return 'series';
+  if (/(?:\bS\d{1,2}\b|сезон|с\.\d{1,2}\b|сери[ияй]|сериал|мультсериал|эпизод|season|выпуск|\[\s*\d+\s*[-–—]\s*\d+|\b\d+\s*из\s*\d+\b|\b\d{4}\s*[-–—]\s*\d{4}\b)/iu.test(value)) return 'series';
   return 'movie';
 }
 

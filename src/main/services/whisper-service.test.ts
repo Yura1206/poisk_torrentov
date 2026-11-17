@@ -15,6 +15,7 @@ describe('whisper-service query autocorrection rules', () => {
     expect(hasActualCorrection('нейровася', 'Нейровася 2 сезон')).toBe(false);
     expect(hasActualCorrection('интерстеллар', 'Интерстеллар смотреть онлайн')).toBe(false);
     expect(hasActualCorrection('камеди клаб', 'Камеди Клаб 2024')).toBe(false);
+    expect(hasActualCorrection('инопланетянин', 'Инопланетянины существуют')).toBe(false);
   });
 
   it('accepts suggestions that fix an actual typo or misspelled word', () => {

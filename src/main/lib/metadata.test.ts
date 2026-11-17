@@ -197,4 +197,18 @@ describe('parseTopicHtml', () => {
     expect(res.year).toBe(2026);
     expect(res.season).toBe(2);
   });
+
+  it('фильтрует нерелевантные релизы без слов запроса в названии', () => {
+    const alienMovie = base({ title: 'Инопланетянин', alternativeTitles: ['E.T. The Extra-Terrestrial'] });
+    const petAlien = base({ title: 'Любимчик инопланетян', alternativeTitles: ['Pet Alien'] });
+    const spilbergDoc = base({ title: 'Куда улетел Инопланетянин? Детство по Спилбергу', alternativeTitles: [] });
+    const alienNeighbor = base({ title: 'Мой сосед — пришелец', alternativeTitles: ['Инопланетянин', 'Ayalaan'] });
+    const autopsy = base({ title: 'Вскрытие пришельца', alternativeTitles: ['Alien Autopsy'] });
+
+    expect(normalTitleMatches('инопланетянин', alienMovie)).toBe(true);
+    expect(normalTitleMatches('инопланетянин', petAlien)).toBe(true);
+    expect(normalTitleMatches('инопланетянин', spilbergDoc)).toBe(true);
+    expect(normalTitleMatches('инопланетянин', alienNeighbor)).toBe(false);
+    expect(normalTitleMatches('инопланетянин', autopsy)).toBe(false);
+  });
 });

@@ -63,6 +63,20 @@ describe('PosterService extraction', () => {
     expect(extracted).toBe('https://i126.fastpic.org/big/2025/0929/47/2f0e7293c9dded242de4b5cf2e902347.jpg');
   });
 
+  it('ignores age rating badges (12+, 16+, 18+) and picks the actual poster on RuTracker', async () => {
+    const service = new PosterService();
+    const html = `
+      <div class="post_body">
+        <var class="postImg postImgAligned img-right" title="https://i.postimg.cc/12plus-badge.png"></var>
+        <var class="postImg postImgAligned img-right" title="https://i126.fastpic.org/big/2023/spielberg_et_doc.jpg"></var>
+      </div>
+    `;
+    // @ts-expect-error accessing private method for unit test
+    const extracted = service.extractPosterFromHtml(html, 'https://rutracker.org/forum/viewtopic.php?t=6365519');
+    expect(extracted).toBe('https://i126.fastpic.org/big/2023/spielberg_et_doc.jpg');
+    expect(extracted).not.toContain('12plus');
+  });
+
   it('extracts poster from NNMClub and never picks rss.png', async () => {
     const service = new PosterService();
     const html = `
