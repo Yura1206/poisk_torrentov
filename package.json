@@ -1,6 +1,6 @@
 {
   "name": "torrent-navigator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Настольный поиск публично доступных торрент-раздач",
   "main": "dist/main/main/index.js",
