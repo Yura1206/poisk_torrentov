@@ -282,12 +282,30 @@ export class PosterService {
     try {
       // 1. Check known or extracted KP ID first
       const normClean = normalizeTitle(cleanTitle);
-      let knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) 
-        || this.knownKpIds.get(normClean)
-        || this.kpIdByTitle.get(cleanTitle.toLowerCase())
-        || this.kpIdByTitle.get(normClean)
-        || KNOWN_KINOPOISK_IDS[cleanTitle.toLowerCase()]
-        || KNOWN_KINOPOISK_IDS[normClean];
+      const isTargetSeries = contentType === 'series' || contentType === 'reality';
+      const isTargetMovie = contentType === 'movie';
+
+      let knownKpId: string | undefined;
+
+      // Type-specific overrides for ambiguous titles
+      if (normClean === 'викинги') {
+        if (isTargetMovie) {
+          if (year === 1958) knownKpId = '8535';
+          else knownKpId = '673716';
+        } else {
+          // Legendary TV series Vikings (2013-2020)
+          knownKpId = '682255';
+        }
+      }
+
+      if (!knownKpId) {
+        knownKpId = this.knownKpIds.get(cleanTitle.toLowerCase()) 
+          || this.knownKpIds.get(normClean)
+          || this.kpIdByTitle.get(cleanTitle.toLowerCase())
+          || this.kpIdByTitle.get(normClean)
+          || KNOWN_KINOPOISK_IDS[cleanTitle.toLowerCase()]
+          || KNOWN_KINOPOISK_IDS[normClean];
+      }
 
       if (!knownKpId) {
         for (const [key, id] of Object.entries(KNOWN_KINOPOISK_IDS)) {
@@ -301,6 +319,16 @@ export class PosterService {
       if (knownKpId) {
         const kpRatings = await this.fetchRatingsByKpId(knownKpId, cacheKey, undefined, cleanTitle, year);
         if (kpRatings && (kpRatings.kp || kpRatings.imdb)) {
+          // If country or imdbReviewsUrl is missing, augment from TMDB!
+          if (!kpRatings.country || !kpRatings.imdbReviewsUrl) {
+            const tmdb = await this.fetchTmdbRatings(cleanTitle, year, contentType);
+            if (tmdb) {
+              if (!kpRatings.country && tmdb.country) kpRatings.country = tmdb.country;
+              if (!kpRatings.imdbReviewsUrl && tmdb.imdbReviewsUrl) kpRatings.imdbReviewsUrl = tmdb.imdbReviewsUrl;
+              if (!kpRatings.imdb && tmdb.imdb) kpRatings.imdb = tmdb.imdb;
+              if (!kpRatings.imdbVotes && tmdb.imdbVotes) kpRatings.imdbVotes = tmdb.imdbVotes;
+            }
+          }
           return kpRatings;
         }
       }

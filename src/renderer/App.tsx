@@ -192,7 +192,8 @@ export default function App() {
     item: TorrentResult;
     x: number;
     y: number;
-    url: string;
+    url?: string;
+    loading?: boolean;
   } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resultsViewportRef = useRef<HTMLDivElement>(null);
@@ -696,22 +697,29 @@ export default function App() {
 
     hoverTimer.current = setTimeout(async () => {
       if (currentHoveredId.current !== item.id) return;
-      const url = await window.torrentApi.resolvePoster(item.title, item.year, item.pageUrl, item.contentType);
-      if (!url || currentHoveredId.current !== item.id) return;
+      setHoverPoster({
+        item,
+        x: clientX,
+        y: clientY,
+        url: undefined,
+        loading: true
+      });
 
-      const img = new Image();
-      img.src = url;
-      img.onload = () => {
-        if (currentHoveredId.current === item.id) {
-          setHoverPoster({
-            item,
-            x: clientX,
-            y: clientY,
-            url
-          });
-        }
-      };
-    }, 200);
+      const url = await window.torrentApi.resolvePoster(item.title, item.year, item.pageUrl, item.contentType);
+      if (currentHoveredId.current !== item.id) return;
+
+      if (url) {
+        setHoverPoster({
+          item,
+          x: clientX,
+          y: clientY,
+          url,
+          loading: false
+        });
+      } else {
+        setHoverPoster((prev) => (prev && prev.item.id === item.id ? { ...prev, loading: false } : prev));
+      }
+    }, 120);
   };
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -2409,11 +2417,10 @@ function ResultRow({
         onMouseEnter={onTitleMouseEnter}
         onMouseLeave={onTitleMouseLeave}
       >
-        <strong title={item.rawTitle}>
+        <strong>
           <a
             href={item.pageUrl}
             className="title-link"
-            title={`Открыть «${item.title}» на ${item.providerName}`}
             onClick={(e) => {
               e.preventDefault();
               void doAction(window.torrentApi.openExternal(item.pageUrl), 'Страница раздачи открыта в браузере.');
@@ -2477,36 +2484,52 @@ function ResultRow({
 function PosterTooltip({
   data
 }: {
-  data: { item: TorrentResult; x: number; y: number; url: string } | null;
+  data: { item: TorrentResult; x: number; y: number; url?: string; loading?: boolean } | null;
 }) {
-  if (!data || !data.url) return null;
+  if (!data) return null;
 
-  const width = 200;
-  const height = 330;
+  const width = Math.min(460, window.innerWidth - 32);
+  const totalHeight = 390;
   let left = data.x + 18;
   if (left + width > window.innerWidth - 16) {
     left = Math.max(16, data.x - width - 18);
   }
   let top = data.y - 40;
-  if (top + height > window.innerHeight - 16) {
-    top = Math.max(16, window.innerHeight - height - 16);
+  if (top + totalHeight > window.innerHeight - 16) {
+    top = Math.max(16, window.innerHeight - totalHeight - 16);
   }
   if (top < 16) top = 16;
 
   return (
-    <div className="poster-tooltip" style={{ left: `${left}px`, top: `${top}px` }}>
-      <img
-        src={data.url}
-        alt={data.item.title}
-        className="poster-tooltip-img"
-        onError={(e) => {
-          (e.currentTarget as HTMLElement).style.display = 'none';
-        }}
-      />
-      <div className="poster-tooltip-caption">
-        <div className="poster-tooltip-title">{data.item.title}</div>
-        <div className="poster-tooltip-sub">
-          {formatReleaseSubline(data.item)}
+    <div className="poster-tooltip-wrap" style={{ left: `${left}px`, top: `${top}px` }}>
+      {/* Окошко с подробностями раздачи — располагается ВЫШЕ баннера */}
+      <div className="poster-tooltip-details">
+        <div className="poster-tooltip-details-text">
+          {data.item.rawTitle}
+        </div>
+      </div>
+
+      {/* Баннер с постером — располагается ПОД подробностями, не перекрывая их */}
+      <div className="poster-tooltip-card">
+        {data.url ? (
+          <img
+            src={data.url}
+            alt={data.item.title}
+            className="poster-tooltip-img"
+            onError={(e) => {
+              (e.currentTarget as HTMLElement).style.display = 'none';
+            }}
+          />
+        ) : (
+          <div className="poster-tooltip-placeholder">
+            {data.loading ? 'Загрузка постера…' : 'Постер отсутствует'}
+          </div>
+        )}
+        <div className="poster-tooltip-caption">
+          <div className="poster-tooltip-title">{data.item.title}</div>
+          <div className="poster-tooltip-sub">
+            {formatReleaseSubline(data.item)}
+          </div>
         </div>
       </div>
     </div>

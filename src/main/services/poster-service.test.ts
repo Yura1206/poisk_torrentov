@@ -254,6 +254,8 @@ describe('PosterService extraction', () => {
     const service = new PosterService();
     const ratings = await service.resolveRatings('Викинги', 2014, undefined, 'series');
     expect(ratings).not.toBeNull();
+    expect(ratings?.kp).toBe('8.1');
+    expect(ratings?.kpReviewsUrl).toBe('https://www.kinopoisk.ru/film/682255/reviews/');
     expect(ratings?.imdb).toBe('8.5');
     expect(ratings?.country).toContain('Канада');
     expect(ratings?.country).not.toContain('Швейцария');
