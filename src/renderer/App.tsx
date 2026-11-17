@@ -239,9 +239,17 @@ export default function App() {
       });
     });
 
+    const unsubCheckStream = window.torrentApi.onProviderCheckStream?.((state) => {
+      setProviderCheckStates((prev) => {
+        const without = prev.filter((s) => s.id !== state.id);
+        return [...without, state];
+      });
+    });
+
     return () => {
       if (requestId.current) void window.torrentApi.cancelSearch(requestId.current);
       unsubStream?.();
+      unsubCheckStream?.();
     };
   }, []);
 
@@ -1428,8 +1436,13 @@ function StatusSummary({
   if (searching) {
     return <span className="status searching"><i />Идёт поиск…</span>;
   }
-  if (checking && !providerStates.length) {
-    return <span className="status checking"><i />Проверка доступности источников…</span>;
+  if (checking) {
+    const okCount = providerStates.filter((s) => s.status === 'ok').length;
+    return (
+      <span className="status checking">
+        <i />Проверка источников… {okCount > 0 ? `(готово: ${okCount})` : ''}
+      </span>
+    );
   }
   if (!providerStates.length) {
     return <span className="status">Источники ещё не проверялись</span>;

@@ -100,16 +100,21 @@ export class SearchEngine {
     this.active.delete(requestId);
   }
 
-  async check(): Promise<ProviderState[]> {
+  async check(onProgress?: (state: ProviderState) => void): Promise<ProviderState[]> {
     return Promise.all(this.providers.map(async (provider) => {
       try {
-        await provider.check();
-        return { id: provider.id, name: provider.name, enabled: true, status: 'ok' as const };
+        const signal = AbortSignal.timeout(6_000);
+        await provider.check(signal);
+        const state: ProviderState = { id: provider.id, name: provider.name, enabled: true, status: 'ok' as const };
+        onProgress?.(state);
+        return state;
       } catch (error) {
         const message = error instanceof ProviderError
           ? error.userMessage
           : (error instanceof Error ? error.message : 'Неизвестная ошибка');
-        return { id: provider.id, name: provider.name, enabled: true, status: 'error' as const, message };
+        const state: ProviderState = { id: provider.id, name: provider.name, enabled: true, status: 'error' as const, message };
+        onProgress?.(state);
+        return state;
       }
     }));
   }

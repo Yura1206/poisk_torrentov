@@ -39,6 +39,11 @@ const api: RendererApi = {
     const handler = (_event: Electron.IpcRendererEvent, payload: import('../shared/types').SearchStreamPayload) => callback(payload);
     ipcRenderer.on('search:stream', handler);
     return () => { ipcRenderer.removeListener('search:stream', handler); };
+  },
+  onProviderCheckStream: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: import('../shared/types').ProviderState) => callback(state);
+    ipcRenderer.on('providers:check-stream', handler);
+    return () => { ipcRenderer.removeListener('providers:check-stream', handler); };
   }
 };
 

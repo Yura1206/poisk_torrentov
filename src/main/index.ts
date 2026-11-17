@@ -121,7 +121,13 @@ function registerIpc(): void {
   ipcMain.handle('history:get', () => storage.history);
   ipcMain.handle('history:remove', async (_event, query: string) => storage.removeHistoryItem(query));
   ipcMain.handle('history:clear', () => storage.clearHistory());
-  ipcMain.handle('providers:check', () => engine.check());
+  ipcMain.handle('providers:check', () => {
+    return engine.check((state) => {
+      try {
+        mainWindow?.webContents.send('providers:check-stream', state);
+      } catch {}
+    });
+  });
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('app:openDataFolder', async () => { await shell.openPath(app.getPath('userData')); });
   ipcMain.handle('external:open', async (_event, url: string) => openExternal(url));
@@ -252,6 +258,13 @@ async function syncRuTrackerCookies(cookieStr: string, sess: Electron.Session): 
 }
 
 let ruTrackerWorker: BrowserWindow | undefined;
+let ruTrackerQueue: Promise<unknown> = Promise.resolve();
+
+function runInRuTrackerQueue<T>(task: () => Promise<T>): Promise<T> {
+  const next = ruTrackerQueue.then(task, task);
+  ruTrackerQueue = next.catch(() => {});
+  return next;
+}
 
 function getRuTrackerWorker(sess: Electron.Session): BrowserWindow {
   if (!ruTrackerWorker || ruTrackerWorker.isDestroyed()) {
@@ -276,59 +289,104 @@ function getRuTrackerWorker(sess: Electron.Session): BrowserWindow {
 async function fetchRuTrackerPage(
   url: string,
   signal?: AbortSignal,
-  timeoutMs = 15000
+  timeoutMs = 10000
 ): Promise<string> {
-  const rutrackerSession = session.fromPartition('persist:rutracker');
-  if (storage.rutrackerAuth?.cookie) {
-    await syncRuTrackerCookies(storage.rutrackerAuth.cookie, rutrackerSession);
-  }
-
-  const win = getRuTrackerWorker(rutrackerSession);
-  const start = Date.now();
-
-  await win.loadURL(url);
-
-  while (Date.now() - start < timeoutMs) {
+  return runInRuTrackerQueue(async () => {
     if (signal?.aborted) throw new Error('Поиск отменён');
-    const title = win.getTitle();
-    const isChallenging =
-      title.toLowerCase().includes('момент') ||
-      title.toLowerCase().includes('moment') ||
-      title.toLowerCase().includes('cloudflare');
-    if (!isChallenging) {
-      try {
-        const cookies = await rutrackerSession.cookies.get({});
-        const cookieString = cookies
-          .filter((c) => (c.domain || '').includes('rutracker'))
-          .map((c) => `${c.name}=${c.value}`)
-          .join('; ');
-        if (cookieString && storage.rutrackerAuth?.authorized && cookieString !== storage.rutrackerAuth.cookie) {
-          await storage.setRuTrackerAuth({
-            ...storage.rutrackerAuth,
-            cookie: cookieString
-          });
-        }
-      } catch {
-        // ignore
-      }
-      return await win.webContents.executeJavaScript('document.documentElement.outerHTML');
+    const rutrackerSession = session.fromPartition('persist:rutracker');
+    if (storage.rutrackerAuth?.cookie) {
+      await syncRuTrackerCookies(storage.rutrackerAuth.cookie, rutrackerSession);
     }
-    await new Promise((r) => setTimeout(r, 350));
-  }
 
-  const finalTitle = win.getTitle();
-  if (
-    finalTitle.toLowerCase().includes('момент') ||
-    finalTitle.toLowerCase().includes('moment') ||
-    finalTitle.toLowerCase().includes('cloudflare')
-  ) {
-    throw new ProviderError(
-      'RuTracker Cloudflare verification required',
-      'RuTracker требует подтверждения Cloudflare («Один момент...»). Откройте настройки и выполните повторный вход.'
-    );
-  }
+    const win = getRuTrackerWorker(rutrackerSession);
+    const start = Date.now();
 
-  return await win.webContents.executeJavaScript('document.documentElement.outerHTML');
+    try {
+      if (win.webContents.isLoading()) {
+        win.webContents.stop();
+      }
+    } catch {}
+
+    let timedOut = false;
+    let abortListener: (() => void) | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { win.webContents.stop(); } catch {}
+        reject(new ProviderError('RuTracker timeout', 'Время ожидания ответа RuTracker истекло'));
+      }, timeoutMs);
+
+      if (signal) {
+        abortListener = () => {
+          clearTimeout(timer);
+          try { win.webContents.stop(); } catch {}
+          reject(new Error('Поиск отменён'));
+        };
+        signal.addEventListener('abort', abortListener, { once: true });
+      }
+    });
+
+    try {
+      const loadPromise = win.loadURL(url).catch((err: any) => {
+        if (err?.code !== 'ERR_ABORTED') {
+          throw err;
+        }
+      });
+      await Promise.race([loadPromise, timeoutPromise]);
+    } catch (err: any) {
+      if (timedOut || signal?.aborted) throw err;
+      const currentUrl = win.webContents.getURL();
+      if (!currentUrl || currentUrl === 'about:blank') {
+        throw new ProviderError(err?.message || 'Load failed', 'Не удалось загрузить страницу RuTracker');
+      }
+    } finally {
+      if (signal && abortListener) {
+        signal.removeEventListener('abort', abortListener);
+      }
+    }
+
+    while (Date.now() - start < timeoutMs) {
+      if (signal?.aborted) throw new Error('Поиск отменён');
+      const title = win.getTitle();
+      const isChallenging =
+        title.toLowerCase().includes('момент') ||
+        title.toLowerCase().includes('moment') ||
+        title.toLowerCase().includes('cloudflare');
+      if (!isChallenging) {
+        try {
+          const cookies = await rutrackerSession.cookies.get({});
+          const cookieString = cookies
+            .filter((c) => (c.domain || '').includes('rutracker'))
+            .map((c) => `${c.name}=${c.value}`)
+            .join('; ');
+          if (cookieString && storage.rutrackerAuth?.authorized && cookieString !== storage.rutrackerAuth.cookie) {
+            await storage.setRuTrackerAuth({
+              ...storage.rutrackerAuth,
+              cookie: cookieString
+            });
+          }
+        } catch {
+          // ignore
+        }
+        return await win.webContents.executeJavaScript('document.documentElement.outerHTML');
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    const finalTitle = win.getTitle();
+    if (
+      finalTitle.toLowerCase().includes('момент') ||
+      finalTitle.toLowerCase().includes('moment') ||
+      finalTitle.toLowerCase().includes('cloudflare')
+    ) {
+      throw new ProviderError(
+        'RuTracker Cloudflare verification required',
+        'RuTracker требует подтверждения Cloudflare («Один момент...»). Откройте настройки и выполните повторный вход.'
+      );
+    }
+
+    return await win.webContents.executeJavaScript('document.documentElement.outerHTML');
+  });
 }
 
 async function openExternal(url: string): Promise<{ ok: boolean; error?: string }> {

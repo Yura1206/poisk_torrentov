@@ -136,7 +136,7 @@ export class RutrackerProvider implements TorrentProvider {
     return results;
   }
 
-  async check(signal: AbortSignal = AbortSignal.timeout(12_000)): Promise<void> {
+  async check(signal: AbortSignal = AbortSignal.timeout(6_000)): Promise<void> {
     const auth = this.getAuth();
     if (!auth?.authorized) {
       throw new ProviderError(

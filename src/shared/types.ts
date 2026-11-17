@@ -160,6 +160,7 @@ export interface RendererApi {
   clearRuTrackerAuth: () => Promise<void>;
   readClipboard?: () => Promise<string>;
   onSearchStream?: (callback: (payload: SearchStreamPayload) => void) => () => void;
+  onProviderCheckStream?: (callback: (state: ProviderState) => void) => () => void;
   getDetectedApps: () => Promise<DetectedApp[]>;
   openMagnetWith: (magnetUrl: string, appId: string, title?: string, saveAsDefault?: boolean) => Promise<{ ok: boolean; error?: string }>;
   resolvePoster: (title: string, year?: number, pageUrl?: string, contentType?: string) => Promise<string | null>;

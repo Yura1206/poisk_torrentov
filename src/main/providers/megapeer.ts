@@ -99,7 +99,7 @@ export class MegapeerProvider implements TorrentProvider {
     return results;
   }
 
-  async check(signal: AbortSignal = AbortSignal.timeout(12_000)): Promise<void> {
+  async check(signal: AbortSignal = AbortSignal.timeout(6_000)): Promise<void> {
     await fetchPage(`${BASE_URL}/browse.php?search=test`, signal, 'win1251');
   }
 }

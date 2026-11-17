@@ -94,8 +94,19 @@ export class RutorProvider implements TorrentProvider {
     return results;
   }
 
-  async check(signal: AbortSignal = AbortSignal.timeout(12_000)): Promise<void> {
-    await fetchPage(`${BASE_URLS[0]}/search/`, signal);
+  async check(signal: AbortSignal = AbortSignal.timeout(6_000)): Promise<void> {
+    let lastError: unknown;
+    for (const candidate of BASE_URLS) {
+      try {
+        const candidateSignal = AbortSignal.any([signal, AbortSignal.timeout(3_000)]);
+        await fetchPage(`${candidate}/search/`, candidateSignal);
+        return;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError ?? new ProviderError('RuTor unreachable', 'Источник RuTor недоступен');
   }
 }
 

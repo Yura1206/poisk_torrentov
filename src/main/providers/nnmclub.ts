@@ -83,7 +83,7 @@ export class NnmClubProvider implements TorrentProvider {
     return results;
   }
 
-  async check(signal: AbortSignal = AbortSignal.timeout(12_000)): Promise<void> {
+  async check(signal: AbortSignal = AbortSignal.timeout(6_000)): Promise<void> {
     await fetchPage(`${BASE_URL}/forum/tracker.php`, signal, {
       method: 'POST',
       encoding: 'win1251',
