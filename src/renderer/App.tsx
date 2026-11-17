@@ -127,27 +127,38 @@ function hasActualCorrection(original: string, candidate: string): boolean {
   const origWords = normOriginal.split(/\s+/).filter(Boolean);
   const candWords = normCandidate.split(/\s+/).filter(Boolean);
 
-  // Must have identical number of words (never suggest adding words, seasons, series or years)
-  if (origWords.length !== candWords.length) {
-    return false;
+  // 1. Same word count: check word-by-word typo distance (<= 2)
+  if (origWords.length === candWords.length) {
+    let typoFound = false;
+    for (let i = 0; i < origWords.length; i++) {
+      const ow = origWords[i];
+      const cw = candWords[i];
+      if (ow === cw) continue;
+
+      const dist = levenshteinDistance(ow, cw);
+      const maxAllowedDist = ow.length > 5 ? 2 : 1;
+      if (dist <= maxAllowedDist) {
+        typoFound = true;
+      } else {
+        return false;
+      }
+    }
+    return typoFound;
   }
 
-  let typoFound = false;
-  for (let i = 0; i < origWords.length; i++) {
-    const ow = origWords[i];
-    const cw = candWords[i];
-    if (ow === cw) continue;
+  // 2. Different word count: allow if compound words were joined or re-segmented (e.g. "гангстер ленд" -> "гангстерленд", "человек паук" -> "человек-паук")
+  const noSpaceOrig = normOriginal.replace(/\s+/g, '');
+  const noSpaceCand = normCandidate.replace(/\s+/g, '');
 
-    const dist = levenshteinDistance(ow, cw);
-    const maxAllowedDist = ow.length > 5 ? 2 : 1;
+  if (Math.abs(noSpaceOrig.length - noSpaceCand.length) <= 2) {
+    const dist = levenshteinDistance(noSpaceOrig, noSpaceCand);
+    const maxAllowedDist = Math.min(noSpaceOrig.length, noSpaceCand.length) > 5 ? 2 : 1;
     if (dist <= maxAllowedDist) {
-      typoFound = true;
-    } else {
-      return false;
+      return true;
     }
   }
 
-  return typoFound;
+  return false;
 }
 
 export default function App() {

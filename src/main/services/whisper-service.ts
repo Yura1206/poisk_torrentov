@@ -44,6 +44,15 @@ function normalizeSpeechResult(text: string): string {
   cleaned = cleaned.replace(/\bигра\s+престолов\b/gi, 'Игра престолов');
   cleaned = cleaned.replace(/\bзвездные\s+войны\b/gi, 'Звёздные войны');
   cleaned = cleaned.replace(/\bво\s+все\s+тяжкие\b/gi, 'Во все тяжкие');
+  cleaned = cleaned.replace(/\bгангстер[\s-]+л[еэ]нд\b/gi, 'Гангстерленд');
+  cleaned = cleaned.replace(/\bчеловек[\s-]+паук\b/gi, 'Человек-паук');
+  cleaned = cleaned.replace(/\bла[\s-]+ла[\s-]+л[еэ]нд\b/gi, 'Ла-Ла Ленд');
+  cleaned = cleaned.replace(/\bдэд[\s-]*пул\b/gi, 'Дэдпул');
+  cleaned = cleaned.replace(/\bдед[\s-]*пул\b/gi, 'Дэдпул');
+  cleaned = cleaned.replace(/\bаква[\s-]*мен\b/gi, 'Аквамен');
+  cleaned = cleaned.replace(/\bбэт[\s-]*мен\b/gi, 'Бэтмен');
+  cleaned = cleaned.replace(/\bспайдер[\s-]*мен\b/gi, 'Спайдермен');
+  cleaned = cleaned.replace(/\bсаша[\s-]+таня\b/gi, 'СашаТаня');
 
   // Strip punctuation at edges
   cleaned = cleaned.replace(/^[.,!?:;\-–—\s]+|[.,!?:;\-–—\s]+$/g, '').trim();
@@ -76,15 +85,21 @@ export function levenshteinDistance(a: string, b: string): number {
 
 export function cleanSuggestionSuffixes(s: string): string {
   let res = s || '';
-  // Strip trailing search junk (смотреть онлайн, актеры, и т.д.)
+
+  // 1. Strip season, series, episode, part with preceding or succeeding numbers: e.g. "2 сезон", "сезон 2", "1 серия", "выпуск 3", "2 часть"
+  res = res.replace(/\s*(?:[-–—|/]\s*)?\b\d+\s*(?:сезон(?:ы|а)?|season(?:s)?|сери(?:и|я|й)|series|выпуск(?:и|ов)?|эпизод(?:ы|а)?|episode(?:s)?|часть).*$/iu, '').trim();
+  res = res.replace(/\s*(?:[-–—|/]\s*)?(?:сезон(?:ы|а)?|season(?:s)?|сери(?:и|я|й)|series|выпуск(?:и|ов)?|эпизод(?:ы|а)?|episode(?:s)?|часть)(?:\s*\d+)?.*$/iu, '').trim();
+
+  // 2. Strip trailing search junk (смотреть онлайн, актеры, и т.д.)
   res = res.replace(/\s+(смотреть(\s+онлайн)?|в\s+хорошем\s+качестве|аудио(книга)?|слушать(\s+онлайн)?|актеры|актори|рутуб|вк|ютуб|книга|википедия|дата\s+выхода|голосование|участники|все\s+серии|отзывы|трейлер).*$/gi, '').trim();
 
-  // Strip season, series, episode suffixes, e.g. "3 сезон", "сезон 3", "1 серия", "выпуск 5"
-  res = res.replace(/\s*(?:[-–—|/]\s*)?(?:\d+\s+)?(?:сезон(?:ы|а)?|season(?:s)?|сери(?:и|я|й)|series|выпуск(?:и|ов)?|эпизод(?:ы|а)?|episode(?:s)?)(?:\s*\d+)?.*$/iu, '').trim();
-
-  // Strip year suffixes, e.g. "2024 года", "1999"
+  // 3. Strip year suffixes, e.g. "2024 года", "1999"
   res = res.replace(/\s*(?:[-–—|/]\s*)?(?:19\d\d|20\d\d)(?:\s*года?)?.*$/iu, '').trim();
   res = res.replace(/\s*\b\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?.*$/iu, '').trim();
+
+  // 4. Strip lone trailing numbers left behind by suggestion queries (e.g. "Нейровася 2" or "Гангстер ленд 2")
+  res = res.replace(/\s+\d+$/u, '').trim();
+
   return res.trim();
 }
 
@@ -94,13 +109,15 @@ export function hasActualCorrection(original: string, candidate: string): boolea
   if (!normOriginal || !normCandidate) return false;
   if (normOriginal === normCandidate) return false;
 
-  const origWords = normOriginal.split(/\s+/).filter(Boolean);
-  const candWords = normCandidate.split(/\s+/).filter(Boolean);
-
-  // Candidate must have exactly the same number of words (must NOT add new words, seasons, series, phrases)
-  if (origWords.length !== candWords.length) {
+  // Never allow candidate to introduce new numbers/digits if original had none
+  const origHasDigits = /\d/.test(normOriginal);
+  const candHasDigits = /\d/.test(normCandidate);
+  if (!origHasDigits && candHasDigits) {
     return false;
   }
+
+  const origWords = normOriginal.split(/\s+/).filter(Boolean);
+  const candWords = normCandidate.split(/\s+/).filter(Boolean);
 
   // Candidate stripped of suffixes must match
   const cleanCand = cleanSuggestionSuffixes(candidate).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').trim();
@@ -109,42 +126,55 @@ export function hasActualCorrection(original: string, candidate: string): boolea
     return false;
   }
 
-  // Check each word: it must either match exactly or be a close typo correction (distance <= 2)
-  let typoFound = false;
-  for (let i = 0; i < origWords.length; i++) {
-    const ow = origWords[i];
-    const cw = candWords[i];
-    if (ow === cw) continue;
+  // 1. Same word count: check word-by-word typo distance (<= 2)
+  if (origWords.length === candWords.length) {
+    let typoFound = false;
+    for (let i = 0; i < origWords.length; i++) {
+      const ow = origWords[i];
+      const cw = candWords[i];
+      if (ow === cw) continue;
 
-    const dist = levenshteinDistance(ow, cw);
-    const maxAllowedDist = ow.length > 5 ? 2 : 1;
-    if (dist <= maxAllowedDist) {
-      typoFound = true;
-    } else {
-      // Word completely changed or unrelated
-      return false;
+      const dist = levenshteinDistance(ow, cw);
+      const maxAllowedDist = ow.length > 5 ? 2 : 1;
+      if (dist <= maxAllowedDist) {
+        typoFound = true;
+      } else {
+        // Word completely changed or unrelated
+        return false;
+      }
+    }
+    return typoFound;
+  }
+
+  // 2. Joining compound words (e.g. "гангстер ленд" -> "гангстерленд", "интер стеллар" -> "интерстеллар", "дэд пул" -> "дэдпул")
+  // Only allowed when words were merged (candidate has fewer words than original), no added words or numbers
+  if (candWords.length < origWords.length) {
+    const noSpaceOrig = normOriginal.replace(/\s+/g, '');
+    const noSpaceCand = normCandidate.replace(/\s+/g, '');
+
+    if (Math.abs(noSpaceOrig.length - noSpaceCand.length) <= 2) {
+      const dist = levenshteinDistance(noSpaceOrig, noSpaceCand);
+      const maxAllowedDist = Math.min(noSpaceOrig.length, noSpaceCand.length) > 5 ? 2 : 1;
+      if (dist <= maxAllowedDist) {
+        return true;
+      }
     }
   }
 
-  return typoFound;
+  return false;
 }
 
 export async function autoCorrectTitle(text: string): Promise<string> {
   if (!text || text.trim().length < 2) return text;
   const original = text.trim();
 
-  // 1. First, check Yandex Speller. If words are spelled correctly, return original immediately!
+  // 1. Yandex Speller: check dictionary spelling for typos
   try {
     const url = 'https://speller.yandex.net/services/spellservice.json/checkText?lang=ru,en&text=' + encodeURIComponent(original);
     const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (res.ok) {
       const items = await res.json() as Array<{ word: string; s: string[] }>;
-      if (Array.isArray(items)) {
-        // If Yandex Speller says NO errors, the input text has NO typos! Do not suggest anything!
-        if (items.length === 0) {
-          return original;
-        }
-
+      if (Array.isArray(items) && items.length > 0) {
         let corrected = original;
         for (const item of items) {
           if (item.word && item.s && item.s[0]) {
@@ -165,7 +195,7 @@ export async function autoCorrectTitle(text: string): Promise<string> {
     // ignore network timeout
   }
 
-  // 2. Google Suggest: only if strict typo correction matches (exact word count, distance <= 2)
+  // 2. Google Suggest: check if common search queries provide typo/compound corrections
   try {
     const url = 'https://suggestqueries.google.com/complete/search?client=chrome&hl=ru&gl=ru&q=' + encodeURIComponent(original);
     const res = await fetch(url, {
@@ -191,6 +221,29 @@ export async function autoCorrectTitle(text: string): Promise<string> {
     }
   } catch {
     // ignore network timeout
+  }
+
+  // 3. Compound title check via TMDB: if words were spoken separated by spaces, check if joining them forms a real title (e.g. "Гангстер Ленд" -> "Гангстерленд")
+  if (original.includes(' ')) {
+    const merged = original.replace(/\s+/g, '');
+    if (merged.length >= 4) {
+      try {
+        const tmdbUrl = `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(merged)}&api_key=4ef0d7355d9ffb5151e987764708ce96&language=ru-RU`;
+        const tmdbRes = await fetch(tmdbUrl, { signal: AbortSignal.timeout(2000) });
+        if (tmdbRes.ok) {
+          const tmdbData = await tmdbRes.json() as { results?: Array<{ title?: string; name?: string }> };
+          if (Array.isArray(tmdbData.results) && tmdbData.results.length > 0) {
+            const first = tmdbData.results[0];
+            const cand = first.title || first.name;
+            if (cand && hasActualCorrection(original, cand)) {
+              return cand;
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
   }
 
   return original;

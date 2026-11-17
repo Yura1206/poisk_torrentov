@@ -24,6 +24,11 @@ describe('whisper-service query autocorrection rules', () => {
     expect(hasActualCorrection('мстители вайна', 'Мстители Война')).toBe(true);
   });
 
+  it('accepts compound titles that were split into words or hyphenated', () => {
+    expect(hasActualCorrection('Гангстер Ленд', 'Гангстерленд')).toBe(true);
+    expect(hasActualCorrection('гангстер лэнд', 'Гангстерленд')).toBe(true);
+  });
+
   it('autoCorrectTitle returns original query when no typos are present', async () => {
     const res1 = await autoCorrectTitle('экстрасенсы реванш');
     expect(res1).toBe('экстрасенсы реванш');
@@ -37,5 +42,10 @@ describe('whisper-service query autocorrection rules', () => {
     expect(res).toBe('Интерстеллар');
     expect(res).not.toContain('сезон');
     expect(res).not.toContain('смотреть');
+  });
+
+  it('autoCorrectTitle fixes compound split titles like Гангстер Ленд to Гангстерленд', async () => {
+    const res = await autoCorrectTitle('Гангстер Ленд');
+    expect(res).toBe('Гангстерленд');
   });
 });
