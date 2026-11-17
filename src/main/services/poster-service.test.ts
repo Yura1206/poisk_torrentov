@@ -240,4 +240,13 @@ describe('PosterService extraction', () => {
     expect(ratings?.kpNotFormed).toBe(true);
     expect(ratings?.kpReviewsUrl).toBe('https://www.kinopoisk.ru/film/400612/reviews/');
   });
+
+  it('resolves TV series poster for Vikings and never movie from 1958 or 2014', async () => {
+    const service = new PosterService();
+    const poster = await service.resolvePoster('Викинги', 2019, undefined, 'series');
+    expect(poster).toBeDefined();
+    expect(poster).not.toContain('vikingi-1958');
+    expect(poster).not.toContain('vikingi-2014');
+    expect(poster).toContain('1de3R902B5EEMmohBQsExd5V87Y');
+  });
 });

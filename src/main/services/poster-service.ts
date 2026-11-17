@@ -735,7 +735,8 @@ export class PosterService {
 
   private async fetchTmdbPoster(cleanTitle: string, year?: number, contentType?: string): Promise<string | null> {
     try {
-      const isTv = contentType === 'series' || contentType === 'reality' || !contentType;
+      const isTargetSeries = contentType === 'series' || contentType === 'reality';
+      const isTargetMovie = contentType === 'movie';
       const queries = [cleanTitle];
       const norm = normalizeTitle(cleanTitle);
       for (const [key, aliases] of Object.entries(TITLE_SEARCH_ALIASES)) {
@@ -745,7 +746,13 @@ export class PosterService {
       }
 
       for (const q of queries) {
-        const endpoints = isTv ? ['search/tv', 'search/movie'] : ['search/movie', 'search/tv'];
+        // Enforce strict media type matching: never search movies when target is a series!
+        const endpoints = isTargetSeries
+          ? ['search/tv']
+          : isTargetMovie
+          ? ['search/movie']
+          : ['search/tv', 'search/movie'];
+
         for (const ep of endpoints) {
           const url = `https://api.themoviedb.org/3/${ep}?query=${encodeURIComponent(q)}&api_key=${TMDB_API_KEY}&language=ru-RU`;
           const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
@@ -766,14 +773,7 @@ export class PosterService {
           };
           if (!Array.isArray(data.results) || data.results.length === 0) continue;
 
-          // Prioritize Russian origin for shows / domestic releases
-          const results = [...data.results].sort((a, b) => {
-            const aRu = (a.origin_country || []).includes('RU') || a.original_language === 'ru';
-            const bRu = (b.origin_country || []).includes('RU') || b.original_language === 'ru';
-            return (bRu ? 1 : 0) - (aRu ? 1 : 0);
-          });
-
-          for (const item of results) {
+          for (const item of data.results) {
             if (!item.poster_path) continue;
             const candTitle = item.name || item.title || '';
             const candOrig = item.original_name || item.original_title || '';
@@ -784,9 +784,9 @@ export class PosterService {
 
             const firstYear = parseInt((item.first_air_date || item.release_date || '').slice(0, 4), 10);
             if (year && firstYear) {
-              if (ep.includes('tv') || contentType === 'series' || contentType === 'reality') {
+              if (ep.includes('tv') || isTargetSeries) {
                 if (year < firstYear - 1) continue;
-              } else if (Math.abs(firstYear - year) > 1) {
+              } else if (Math.abs(firstYear - year) > 2) {
                 continue;
               }
             }
@@ -814,26 +814,39 @@ export class PosterService {
           id?: string;
           l?: string;
           y?: number;
+          q?: string;
+          qid?: string;
           i?: { imageUrl?: string };
         }>;
       };
       if (!Array.isArray(data.d) || data.d.length === 0) return null;
 
-      let match = data.d.find((item) => {
+      const isTargetSeries = contentType === 'series' || contentType === 'reality';
+      const isTargetMovie = contentType === 'movie';
+
+      const match = data.d.find((item) => {
         if (!item.id || !item.l || !item.i?.imageUrl) return false;
         if (!titlesMatch(cleanTitle, item.l)) return false;
+
+        // STRICT TYPE ENFORCEMENT: Never match a movie when looking for a TV series!
+        if (contentType) {
+          const candQid = (item.qid || '').toLowerCase();
+          const candQ = (item.q || '').toLowerCase();
+          const isCandSeries = candQid.includes('series') || candQ.includes('series') || candQ.includes('tv');
+          if (isTargetSeries && !isCandSeries) return false;
+          if (isTargetMovie && isCandSeries) return false;
+        }
+
+        // STRICT YEAR ENFORCEMENT: Never match across different eras (> 2 years difference)
         if (year && item.y) {
-          if (contentType === 'series' || contentType === 'reality') {
+          if (isTargetSeries) {
             if (year < item.y - 1) return false;
-          } else if (Math.abs(item.y - year) > 1) {
+          } else if (Math.abs(item.y - year) > 2) {
             return false;
           }
         }
         return true;
       });
-      if (!match) {
-        match = data.d.find((item) => item.id && item.l && item.i?.imageUrl && titlesMatch(cleanTitle, item.l));
-      }
 
       const rawImg = match?.i?.imageUrl;
       if (rawImg) {
@@ -1072,7 +1085,29 @@ export class PosterService {
     // Filter results strictly matching the requested title!
     const matchingTitleItems = data.results.filter((item) => {
       if (!item.posterUrl || !item.title) return false;
-      return titlesMatch(cleanTitle, item.title, item.originalTitle);
+      if (!titlesMatch(cleanTitle, item.title, item.originalTitle)) return false;
+
+      // STRICT TYPE ENFORCEMENT: A movie can NEVER match a series, and vice-versa!
+      if (contentType) {
+        const isTargetSeries = contentType === 'series' || contentType === 'reality';
+        const candType = (item.contentType || item.type || '').toLowerCase();
+        const isCandSeries = candType.includes('series') || candType.includes('show') || candType.includes('сериал');
+        if (isTargetSeries && !isCandSeries) return false;
+        if (!isTargetSeries && isCandSeries && contentType === 'movie') return false;
+      }
+
+      // STRICT YEAR ENFORCEMENT: Never match across different eras (> 2 years difference)
+      if (year && item.year) {
+        const isTargetSeries = contentType === 'series' || contentType === 'reality';
+        if (!isTargetSeries && Math.abs(item.year - year) > 2) {
+          return false;
+        }
+        if (isTargetSeries && year < item.year - 1) {
+          return false;
+        }
+      }
+
+      return true;
     });
 
     if (matchingTitleItems.length === 0) {
