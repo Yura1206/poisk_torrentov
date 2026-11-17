@@ -454,7 +454,7 @@ export class PosterService {
 
   private async extractKinopoiskIdFromPage(pageUrl: string): Promise<string | null> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       let html = '';
       if (pageUrl.includes('rutracker.org') && this.ruTrackerPageLoader) {
