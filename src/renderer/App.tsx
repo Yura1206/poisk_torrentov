@@ -20,14 +20,14 @@ const initialSort: SortState = { field: 'relevance', direction: 'desc' };
 const PAGE_SIZE = 48;
 const globalRatingsCache = new Map<string, FilmRatings | null>();
 
-function getRatingCacheKey(title: string, year?: number): string {
+function getRatingCacheKey(title: string, year?: number, contentType?: string): string {
   const clean = title
     .replace(/[\(\[\{].*?[\)\]\}]/g, ' ')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
-  return `${clean}:${year ?? ''}`;
+  return `${clean}:${year ?? ''}:${contentType ?? ''}`;
 }
 
 const COUNTRIES_LIST = [
@@ -394,11 +394,11 @@ export default function App() {
     if (!searched || searching || pagedResults.length === 0) return;
     const seen = new Set<string>();
     for (const item of pagedResults) {
-      const key = getRatingCacheKey(item.title, item.year);
+      const key = getRatingCacheKey(item.title, item.year, item.contentType);
       if (!key || seen.has(key)) continue;
       seen.add(key);
       if (!globalRatingsCache.has(key)) {
-        void window.torrentApi.resolveRatings?.(item.title, item.year, item.pageUrl).then((r) => {
+        void window.torrentApi.resolveRatings?.(item.title, item.year, item.pageUrl, item.contentType).then((r) => {
           globalRatingsCache.set(key, r ?? null);
         }).catch(() => {});
       }
@@ -1953,7 +1953,7 @@ function TorrentDetailModal({
   onOpenMagnet(item: TorrentResult): void;
   onToast(msg: string): void;
 }) {
-  const cacheKey = getRatingCacheKey(item.title, item.year);
+  const cacheKey = getRatingCacheKey(item.title, item.year, item.contentType);
   const [posterUrl, setPosterUrl] = useState<string | null>(null);
   const [ratings, setRatings] = useState<FilmRatings | null>(() => globalRatingsCache.get(cacheKey) ?? null);
   const [ratingsLoading, setRatingsLoading] = useState(() => !globalRatingsCache.has(cacheKey));
@@ -1976,7 +1976,7 @@ function TorrentDetailModal({
       return;
     }
     setRatingsLoading(true);
-    void window.torrentApi.resolveRatings?.(item.title, item.year, item.pageUrl).then((r) => {
+    void window.torrentApi.resolveRatings?.(item.title, item.year, item.pageUrl, item.contentType).then((r) => {
       globalRatingsCache.set(cacheKey, r ?? null);
       if (active) {
         setRatings(r ?? null);
@@ -1984,7 +1984,7 @@ function TorrentDetailModal({
       }
     });
     return () => { active = false; };
-  }, [cacheKey, item.title, item.year]);
+  }, [cacheKey, item.title, item.year, item.contentType]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

@@ -250,6 +250,15 @@ describe('PosterService extraction', () => {
     expect(poster).toContain('1de3R902B5EEMmohBQsExd5V87Y');
   });
 
+  it('resolves TV series ratings for Vikings (2014 season) without getting confused with 2014 movie', async () => {
+    const service = new PosterService();
+    const ratings = await service.resolveRatings('Викинги', 2014, undefined, 'series');
+    expect(ratings).not.toBeNull();
+    expect(ratings?.imdb).toBe('8.5');
+    expect(ratings?.country).toContain('Канада');
+    expect(ratings?.country).not.toContain('Швейцария');
+  });
+
   it('resolves poster for Transformers 3 with both ё and е seamlessly', async () => {
     const service = new PosterService();
     const posterYo = await service.resolvePoster('Трансформеры 3: Тёмная сторона Луны', 2011, undefined, 'movie');

@@ -178,12 +178,13 @@ export class TorrentKinoProvider implements TorrentProvider {
           const sourceDetails = sourceMap.get(t.id);
           const videoText = sourceDetails?.video || '';
           const dnName = extractDnFromMagnet(sourceDetails?.magnetUrl);
+          const isSeries = film.contentType === 'tv-series' || film.contentType === 'mini-series' || (film.contentType !== 'movie' && t.seasonStart != null);
           const qualityParts = [t.quality, t.qualityLabel].filter(Boolean).join(' ');
           const defaultRawTitle = [
             film.title,
             film.originalTitle ? `/ ${film.originalTitle}` : '',
             film.year ? `(${film.year})` : '',
-            t.seasonStart ? `[Сезон ${t.seasonStart}${t.seasonEnd && t.seasonEnd !== t.seasonStart ? '-' + t.seasonEnd : ''}]` : '',
+            isSeries && t.seasonStart ? `[Сезон ${t.seasonStart}${t.seasonEnd && t.seasonEnd !== t.seasonStart ? '-' + t.seasonEnd : ''}]` : '',
             qualityParts
           ].filter(Boolean).join(' ');
           const rawTitle = dnName || defaultRawTitle;
@@ -195,11 +196,12 @@ export class TorrentKinoProvider implements TorrentProvider {
           const alternatives = Array.from(new Set([...parsedTitle.alternatives, ...(film.originalTitle ? [film.originalTitle] : [])]));
           const sizeBytes = parseSizeBytes(t.size);
           const sizeLabel = sizeBytes ? formatBytes(sizeBytes) : (t.size || 'Не указан');
-          const isSeries = film.contentType === 'tv-series' || film.contentType === 'mini-series' || t.seasonStart != null;
-          const season = t.seasonStart ?? extractSeason(rawTitle) ?? extractSeason(defaultRawTitle);
-          const seasons = (t.seasonStart != null && t.seasonEnd != null && t.seasonEnd >= t.seasonStart)
-            ? Array.from({ length: t.seasonEnd - t.seasonStart + 1 }, (_, i) => (t.seasonStart as number) + i)
-            : (extractSeasons(rawTitle).length ? extractSeasons(rawTitle) : extractSeasons(defaultRawTitle));
+          const season = isSeries ? (t.seasonStart ?? extractSeason(rawTitle) ?? extractSeason(defaultRawTitle)) : undefined;
+          const seasons = isSeries
+            ? ((t.seasonStart != null && t.seasonEnd != null && t.seasonEnd >= t.seasonStart)
+                ? Array.from({ length: t.seasonEnd - t.seasonStart + 1 }, (_, i) => (t.seasonStart as number) + i)
+                : (extractSeasons(rawTitle).length ? extractSeasons(rawTitle) : extractSeasons(defaultRawTitle)))
+            : undefined;
 
           const techString = [dnName, videoText, t.qualityLabel, t.quality, rawTitle, defaultRawTitle].filter(Boolean).join(' ');
           let resolution = extractResolution(techString, qualityAliases);

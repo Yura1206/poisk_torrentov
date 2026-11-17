@@ -250,6 +250,73 @@ describe('TorrentKinoProvider', () => {
       expect(results[0].leeches).toBe(34);
       expect(results[0].pageUrl).toBe('https://torrentkino.org/films/matritsa-1999#torrent-19623416');
       expect(results[0].torrentUrl).toBe('https://torrentkino.org/api/torrents/19623416?t=123');
+      expect(results[0].contentType).toBe('movie');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('сохраняет movie и не проставляет сезон для раздач на странице фильма, даже если у торрента указан seasonStart', async () => {
+    const searchResponse = {
+      results: [
+        {
+          kinopoiskId: '683258',
+          title: 'Викинги',
+          originalTitle: 'Northmen - A Viking Saga',
+          slug: 'vikingi-2014',
+          year: 2014,
+          genres: ['Боевик'],
+          countries: ['Швейцария'],
+          ratingKp: 5.9,
+          ratingImdb: 5.4,
+          posterUrl: 'https://cdn.torrentkino.org/posters/vikingi-2014.jpg',
+          contentType: 'movie'
+        }
+      ]
+    };
+
+    const filmPageHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head></head>
+      <body>
+        <script>
+          self.__next_f.push([1, "{\\"id\\":22287475,\\"quality\\":\\"1080p\\",\\"qualityLabel\\":\\"BDRip 1080p\\",\\"size\\":\\"9.5 ГБ\\",\\"seeds\\":10,\\"peers\\":1,\\"translation\\":\\"Дублированный\\",\\"seasonStart\\":2,\\"seasonEnd\\":2,\\"episodeStart\\":1,\\"episodeEnd\\":10,\\"episodesTotal\\":10,\\"sortedStudios\\":[],\\"torrentPath\\":\\"/api/torrents/22287475?t=123\\"}"]);
+        </script>
+      </body>
+      </html>
+    `;
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/search')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => searchResponse
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        arrayBuffer: async () => Buffer.from(filmPageHtml, 'utf8')
+      });
+    }) as never;
+
+    try {
+      const provider = new TorrentKinoProvider();
+      const results = await provider.search({
+        query: 'Викинги',
+        page: 0,
+        signal: new AbortController().signal,
+        customStudios: [],
+        qualityAliases: []
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0].contentType).toBe('movie');
+      expect(results[0].season).toBeUndefined();
+      expect(results[0].seasons).toBeUndefined();
+      expect(results[0].title).toBe('Викинги');
+      expect(results[0].title).not.toContain('Сезон');
     } finally {
       global.fetch = originalFetch;
     }

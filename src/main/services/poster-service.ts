@@ -47,6 +47,15 @@ function normalizeTitle(s: string): string {
 
 const TMDB_API_KEY = '4ef0d7355d9ffb5151e987764708ce96';
 
+const COUNTRY_CODE_TO_RUSSIAN: Record<string, string> = {
+  US: 'США', RU: 'Россия', GB: 'Великобритания', UK: 'Великобритания',
+  FR: 'Франция', DE: 'Германия', IT: 'Италия', ES: 'Испания',
+  CA: 'Канада', IE: 'Ирландия', JP: 'Япония', KR: 'Южная Корея',
+  CN: 'Китай', AU: 'Австралия', IN: 'Индия', TR: 'Турция',
+  SE: 'Швеция', NO: 'Норвегия', DK: 'Дания', FI: 'Финляндия',
+  CH: 'Швейцария', BR: 'Бразилия', MX: 'Мексика', PL: 'Польша'
+};
+
 const TITLE_SEARCH_ALIASES: Record<string, string[]> = {
   'comedy club': ['камеди клаб'],
   'камеди клаб': ['comedy club'],
@@ -241,11 +250,16 @@ export class PosterService {
     this.ruTrackerPageLoader = loader;
   }
 
-  async resolveRatings(title: string, year?: number, pageUrl?: string): Promise<FilmRatings | null> {
+  async resolveRatings(
+    title: string,
+    year?: number,
+    pageUrl?: string,
+    contentType?: string
+  ): Promise<FilmRatings | null> {
     const cleanTitle = cleanTitleForSearch(title);
     if (!cleanTitle) return null;
 
-    const cacheKey = `${cleanTitle.toLowerCase()}:${year ?? ''}`;
+    const cacheKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
     if (this.ratingsCache.has(cacheKey)) {
       return this.ratingsCache.get(cacheKey) ?? null;
     }
@@ -253,7 +267,7 @@ export class PosterService {
       return this.ratingsPromises.get(cacheKey)!;
     }
 
-    const promise = this.fetchRatingsInternal(cleanTitle, year, pageUrl, cacheKey);
+    const promise = this.fetchRatingsInternal(cleanTitle, year, pageUrl, cacheKey, contentType);
     this.ratingsPromises.set(cacheKey, promise);
     return promise;
   }
@@ -262,7 +276,8 @@ export class PosterService {
     cleanTitle: string,
     year: number | undefined,
     pageUrl: string | undefined,
-    cacheKey: string
+    cacheKey: string,
+    contentType?: string
   ): Promise<FilmRatings | null> {
     try {
       // 1. Check known or extracted KP ID first
@@ -303,19 +318,41 @@ export class PosterService {
             title?: string;
             originalTitle?: string;
             year?: number;
+            contentType?: string;
+            type?: string;
           }>;
         };
         let match: { kinopoiskId?: string | number; slug?: string; title?: string; originalTitle?: string; year?: number } | undefined;
 
         if (Array.isArray(data.results) && data.results.length > 0) {
-          match = data.results.find((item) => {
+          const isTargetSeries = contentType === 'series' || contentType === 'reality';
+          const isTargetMovie = contentType === 'movie';
+
+          const matchingItems = data.results.filter((item) => {
             if (!item.title) return false;
-            const m = titlesMatch(cleanTitle, item.title, item.originalTitle);
-            if (!m) return false;
-            if (year && item.year && Math.abs(item.year - year) > 1) return false;
+            if (!titlesMatch(cleanTitle, item.title, item.originalTitle)) return false;
+
+            // STRICT TYPE ENFORCEMENT: A movie can NEVER match a series, and vice-versa!
+            if (contentType) {
+              const candType = (item.contentType || item.type || '').toLowerCase();
+              const isCandSeries = candType.includes('series') || candType.includes('show') || candType.includes('сериал');
+              if (isTargetSeries && !isCandSeries) return false;
+              if (isTargetMovie && isCandSeries) return false;
+            }
+
+            // STRICT YEAR ENFORCEMENT:
+            if (year && item.year) {
+              if (isTargetSeries) {
+                if (year < item.year - 1) return false;
+              } else if (Math.abs(item.year - year) > 1) {
+                return false;
+              }
+            }
             return true;
           });
-          if (!match) {
+
+          match = matchingItems[0];
+          if (!match && !contentType) {
             match = data.results.find((item) => item.title && titlesMatch(cleanTitle, item.title, item.originalTitle));
           }
         }
@@ -343,8 +380,15 @@ export class PosterService {
         }
       }
 
-      // 4. Fallback: If not found in TorrentKino catalog or page, check IMDb Suggestion API
-      const imdbFallback = await this.fetchImdbFallback(cleanTitle, year);
+      // 4. Check TMDB for ratings & country
+      const tmdbRatings = await this.fetchTmdbRatings(cleanTitle, year, contentType);
+      if (tmdbRatings) {
+        this.ratingsCache.set(cacheKey, tmdbRatings);
+        return tmdbRatings;
+      }
+
+      // 5. Fallback: If not found in TorrentKino or TMDB, check IMDb Suggestion API
+      const imdbFallback = await this.fetchImdbFallback(cleanTitle, year, contentType);
       if (imdbFallback) {
         this.ratingsCache.set(cacheKey, imdbFallback);
         return imdbFallback;
@@ -410,7 +454,139 @@ export class PosterService {
     }
   }
 
-  private async fetchImdbFallback(cleanTitle: string, year?: number): Promise<FilmRatings | null> {
+  private async fetchTmdbRatings(cleanTitle: string, year?: number, contentType?: string): Promise<FilmRatings | null> {
+    try {
+      const isTargetSeries = contentType === 'series' || contentType === 'reality';
+      const ep = isTargetSeries ? 'search/tv' : 'search/movie';
+      const url = `https://api.themoviedb.org/3/${ep}?query=${encodeURIComponent(cleanTitle)}&api_key=${TMDB_API_KEY}&language=ru-RU`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        results?: Array<{
+          id?: number;
+          title?: string;
+          name?: string;
+          original_title?: string;
+          original_name?: string;
+          first_air_date?: string;
+          release_date?: string;
+          origin_country?: string[];
+        }>;
+      };
+      if (!Array.isArray(data.results) || data.results.length === 0) return null;
+
+      for (const item of data.results) {
+        if (!item.id) continue;
+        const candTitle = item.name || item.title || '';
+        const candOrig = item.original_name || item.original_title || '';
+        if (!titlesMatch(cleanTitle, candTitle, candOrig)) continue;
+
+        const firstYear = parseInt((item.first_air_date || item.release_date || '').slice(0, 4), 10);
+        if (year && firstYear) {
+          if (isTargetSeries) {
+            if (year < firstYear - 1) continue;
+          } else if (Math.abs(firstYear - year) > 2) {
+            continue;
+          }
+        }
+
+        const mediaType = isTargetSeries ? 'tv' : 'movie';
+        const extUrl = `https://api.themoviedb.org/3/${mediaType}/${item.id}/external_ids?api_key=${TMDB_API_KEY}`;
+        const extRes = await fetch(extUrl, { signal: AbortSignal.timeout(3000) });
+        const extData = extRes.ok ? ((await extRes.json()) as { imdb_id?: string }) : {};
+
+        let imdbScore: string | undefined;
+        let imdbVotes: string | undefined;
+        const imdbId = extData.imdb_id;
+        if (imdbId) {
+          try {
+            const gqlRes = await fetch('https://api.graphql.imdb.com/', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+                'x-imdb-client-name': 'imdb-web-next-release'
+              },
+              body: JSON.stringify({
+                query: `query { title(id: "${imdbId}") { ratingsSummary { aggregateRating voteCount } } }`
+              }),
+              signal: AbortSignal.timeout(3000)
+            });
+            if (gqlRes.ok) {
+              const gqlData = (await gqlRes.json()) as {
+                data?: {
+                  title?: {
+                    ratingsSummary?: {
+                      aggregateRating?: number;
+                      voteCount?: number;
+                    };
+                  };
+                };
+              };
+              const summary = gqlData.data?.title?.ratingsSummary;
+              if (summary?.aggregateRating) imdbScore = summary.aggregateRating.toFixed(1);
+              if (summary?.voteCount) {
+                const n = summary.voteCount;
+                imdbVotes = n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        const country = item.origin_country?.length
+          ? item.origin_country.map((c) => COUNTRY_CODE_TO_RUSSIAN[c] || c).join(', ')
+          : undefined;
+
+        if (!imdbScore && !country) continue;
+
+        return {
+          imdb: imdbScore,
+          imdbVotes,
+          imdbReviewsUrl: imdbId ? `https://www.imdb.com/title/${imdbId}/reviews/` : undefined,
+          country
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getCountryFromTmdb(cleanTitle: string, contentType?: string, year?: number): Promise<string | undefined> {
+    try {
+      const isTargetSeries = contentType === 'series' || contentType === 'reality';
+      const isTargetMovie = contentType === 'movie';
+      const ep = isTargetSeries ? 'search/tv' : isTargetMovie ? 'search/movie' : 'search/tv';
+      const url = `https://api.themoviedb.org/3/${ep}?query=${encodeURIComponent(cleanTitle)}&api_key=${TMDB_API_KEY}&language=ru-RU`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return undefined;
+      const data = (await res.json()) as {
+        results?: Array<{
+          title?: string;
+          name?: string;
+          original_title?: string;
+          original_name?: string;
+          origin_country?: string[];
+        }>;
+      };
+      if (!Array.isArray(data.results) || data.results.length === 0) return undefined;
+      for (const item of data.results) {
+        const candTitle = item.name || item.title || '';
+        const candOrig = item.original_name || item.original_title || '';
+        if (!titlesMatch(cleanTitle, candTitle, candOrig)) continue;
+        if (item.origin_country && item.origin_country.length > 0) {
+          return item.origin_country.map((c) => COUNTRY_CODE_TO_RUSSIAN[c] || c).join(', ');
+        }
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async fetchImdbFallback(cleanTitle: string, year?: number, contentType?: string): Promise<FilmRatings | null> {
     try {
       const suggestUrl = `https://v3.sg.media-imdb.com/suggestion/x/${encodeURIComponent(cleanTitle)}.json`;
       const res = await fetch(suggestUrl, {
@@ -424,18 +600,49 @@ export class PosterService {
           l?: string;
           y?: number;
           qid?: string;
+          q?: string;
         }>;
       };
       if (!Array.isArray(data.d) || data.d.length === 0) return null;
 
+      const isTargetSeries = contentType === 'series' || contentType === 'reality';
+      const isTargetMovie = contentType === 'movie';
+
       let match = data.d.find((item) => {
         if (!item.id || !item.l) return false;
         if (!titlesMatch(cleanTitle, item.l)) return false;
-        if (year && item.y && Math.abs(item.y - year) > 1) return false;
+
+        // STRICT TYPE ENFORCEMENT
+        if (contentType) {
+          const candQid = (item.qid || '').toLowerCase();
+          const candQ = (item.q || '').toLowerCase();
+          const isCandSeries = candQid.includes('series') || candQ.includes('series') || candQ.includes('tv');
+          if (isTargetSeries && !isCandSeries) return false;
+          if (isTargetMovie && isCandSeries) return false;
+        }
+
+        if (year && item.y) {
+          if (isTargetSeries) {
+            if (year < item.y - 1) return false;
+          } else if (Math.abs(item.y - year) > 1) {
+            return false;
+          }
+        }
         return true;
       });
       if (!match) {
-        match = data.d.find((item) => item.id && item.l && titlesMatch(cleanTitle, item.l));
+        match = data.d.find((item) => {
+          if (!item.id || !item.l) return false;
+          if (!titlesMatch(cleanTitle, item.l)) return false;
+          if (contentType) {
+            const candQid = (item.qid || '').toLowerCase();
+            const candQ = (item.q || '').toLowerCase();
+            const isCandSeries = candQid.includes('series') || candQ.includes('series') || candQ.includes('tv');
+            if (isTargetSeries && !isCandSeries) return false;
+            if (isTargetMovie && isCandSeries) return false;
+          }
+          return true;
+        });
       }
 
       if (match?.id) {
@@ -498,7 +705,12 @@ export class PosterService {
         }
         let kpData: FilmRatings | null = null;
         if (knownKpId) {
-          kpData = await this.fetchRatingsByKpId(knownKpId, `${cleanTitle.toLowerCase()}:${year ?? ''}`, undefined, cleanTitle, year);
+          kpData = await this.fetchRatingsByKpId(knownKpId, `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`, undefined, cleanTitle, year);
+        }
+
+        let resolvedCountry = kpData?.country;
+        if (!resolvedCountry) {
+          resolvedCountry = await this.getCountryFromTmdb(cleanTitle, contentType, year);
         }
 
         return {
@@ -509,7 +721,7 @@ export class PosterService {
           imdb: imdbScore || kpData?.imdb,
           imdbVotes: imdbVotes || kpData?.imdbVotes,
           imdbReviewsUrl: `https://www.imdb.com/title/${imdbId}/reviews/`,
-          country: kpData?.country
+          country: resolvedCountry
         };
       }
       return null;
@@ -625,13 +837,17 @@ export class PosterService {
     if (cleanTitle) {
       const normKey = normalizeTitle(cleanTitle);
       const titleKey = `${normKey}:${year ?? ''}:${contentType ?? ''}`;
-      const titleKeyNoType = `${normKey}:${year ?? ''}:`;
-      let cachedTitlePoster = this.titlePosterCache.get(titleKey) || this.titlePosterCache.get(titleKeyNoType);
+      let cachedTitlePoster = this.titlePosterCache.get(titleKey);
 
-      // For TV series/shows or unversioned titles, share posters across seasons/years
-      if (!cachedTitlePoster && (contentType === 'series' || contentType === 'reality' || !year)) {
-        const seriesKey = `${normKey}::${contentType || 'series'}`;
-        cachedTitlePoster = this.titlePosterCache.get(seriesKey) || this.titlePosterCache.get(`${normKey}::reality`);
+      // Only check un-typed cache if contentType is NOT specified
+      if (!cachedTitlePoster && !contentType) {
+        cachedTitlePoster = this.titlePosterCache.get(`${normKey}:${year ?? ''}:`);
+      }
+
+      // For TV series/shows or unversioned titles, share posters across seasons/years (strictly series/reality!)
+      if (!cachedTitlePoster && (contentType === 'series' || contentType === 'reality')) {
+        const seriesKey = `${normKey}::${contentType}`;
+        cachedTitlePoster = this.titlePosterCache.get(seriesKey) || this.titlePosterCache.get(`${normKey}::series`) || this.titlePosterCache.get(`${normKey}::reality`);
       }
 
       if (cachedTitlePoster) {
@@ -664,8 +880,9 @@ export class PosterService {
           const normKey = normalizeTitle(cleanTitle);
           const titleKey = `${normKey}:${year ?? ''}:${contentType ?? ''}`;
           this.titlePosterCache.set(titleKey, url);
-          const titleKeyNoType = `${normKey}:${year ?? ''}:`;
-          this.titlePosterCache.set(titleKeyNoType, url);
+          if (!contentType) {
+            this.titlePosterCache.set(`${normKey}:${year ?? ''}:`, url);
+          }
           if (contentType === 'series' || contentType === 'reality') {
             this.titlePosterCache.set(`${normKey}::${contentType}`, url);
             this.titlePosterCache.set(`${normKey}::series`, url);
@@ -1200,8 +1417,8 @@ export class PosterService {
     const best = scored[0];
     if (best && best.score > 0) {
       if (best.item.kinopoiskId) {
-        const ratingsKey = `${cleanTitle.toLowerCase()}:${year ?? ''}`;
-        void this.fetchRatingsByKpId(best.item.kinopoiskId, ratingsKey, best.item.slug);
+        const ratingsKey = `${cleanTitle.toLowerCase()}:${year ?? ''}:${contentType ?? ''}`;
+        void this.fetchRatingsByKpId(best.item.kinopoiskId, ratingsKey, best.item.slug, cleanTitle, year);
       }
       if (best.item.posterUrl) {
         return best.item.posterUrl.startsWith('http')

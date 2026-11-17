@@ -163,7 +163,7 @@ export interface RendererApi {
   getDetectedApps: () => Promise<DetectedApp[]>;
   openMagnetWith: (magnetUrl: string, appId: string, title?: string, saveAsDefault?: boolean) => Promise<{ ok: boolean; error?: string }>;
   resolvePoster: (title: string, year?: number, pageUrl?: string, contentType?: string) => Promise<string | null>;
-  resolveRatings?: (title: string, year?: number, pageUrl?: string) => Promise<FilmRatings | null>;
+  resolveRatings?: (title: string, year?: number, pageUrl?: string, contentType?: string) => Promise<FilmRatings | null>;
   testGateways?: (workerUrl?: string, backupUrl?: string) => Promise<GatewayTestResult>;
   transcribeAudio?: (audioData: number[]) => Promise<{ ok: boolean; text?: string; error?: string }>;
   correctQuery?: (query: string) => Promise<string>;
