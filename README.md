@@ -1,8 +1,8 @@
 # <img src="assets/icon.png" width="28" height="28" alt="Поисковик торрентов" /> Поисковик торрентов
 
-[![Версия](https://img.shields.io/badge/Версия-v1.1.0-blue.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
+[![Версия](https://img.shields.io/badge/Версия-v1.2.0-blue.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
 [![Платформа](https://img.shields.io/badge/Платформа-Windows%2010%20%7C%2011%20(64--bit)-0078D6.svg)](https://github.com/Yura1206/poisk_torrentov/releases)
-[![VirusTotal](https://img.shields.io/badge/VirusTotal-Безопасно%20(0%20угроз)-brightgreen.svg)](https://www.virustotal.com/gui/file/7900cb2ebb1f53526e47f1efe4c383a394f4ab61090309c350e0261250132c0f)
+[![VirusTotal](https://img.shields.io/badge/VirusTotal-Безопасно%20(0%20угроз)-brightgreen.svg)](https://www.virustotal.com/gui/file/45d69a2b9a1f65c4cd68675142f220f948148ea3ac7655355a808d5dd1f44f5b)
 [![Лицензия](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](LICENSE)
 
 **Поисковик торрентов** — современное, быстрое и удобное настольное приложение для Windows, объединяющее поиск фильмов, сериалов и телешоу по крупнейшим русскоязычным каталогам (RuTracker, RuTor, NNM-Club, MegaPeer, TorrentKino) в едином интерфейсе.
@@ -25,8 +25,8 @@
 ---
 
 ### 🛡️ Безопасность и проверка VirusTotal
-Файлы проверены сервисом VirusTotal 43 антивирусными базами — угроз и вредоносного кода не обнаружено (0 срабатываний):  
-👉 **[Открыть полный отчёт проверки на VirusTotal](https://www.virustotal.com/gui/file/7900cb2ebb1f53526e47f1efe4c383a394f4ab61090309c350e0261250132c0f)**
+Файлы проверены сервисом VirusTotal 62 антивирусными базами — угроз и вредоносного кода не обнаружено (0 срабатываний):  
+👉 **[Открыть полный отчёт проверки на VirusTotal](https://www.virustotal.com/gui/file/45d69a2b9a1f65c4cd68675142f220f948148ea3ac7655355a808d5dd1f44f5b)**
 
 > 💡 **Первый запуск в Windows (SmartScreen):**  
 > Поскольку программа является независимым бесплатным проектом без платной цифровой подписи корпорации Microsoft, фильтр **SmartScreen** при первом запуске может показать предупреждение.  
@@ -84,7 +84,7 @@
 ---
 
 ### 8. Настройки программы и обход блокировок для РФ
-Быстрая проверка доступности всех пяти трекеров, переключение встроенных прокси-шлюзов обхода блокировок (Cloudflare Worker и Supabase Edge), выбор торрент-клиента по умолчанию (qBittorrent, uTorrent, Transmission и др.) и настройка предпочтительного видеоплеера.
+Быстрая проверка доступности всех пяти трекеров, тестирование скорости и доступности прокси-шлюзов обхода блокировок (Основной и Резервный с замером пинга), раздельное тестирование источников постеров (TorrentKino, Film.ru, Кинопоиск), выбор торрент-клиента по умолчанию (qBittorrent, uTorrent, Transmission и др.) и настройка предпочтительного видеоплеера.
 [![Настройки программы](assets/screenshots/08_settings_trackers_proxy.jpg)](https://raw.githubusercontent.com/Yura1206/poisk_torrentov/main/assets/screenshots/08_settings_trackers_proxy.jpg)
 
 ---
